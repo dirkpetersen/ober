@@ -244,10 +244,10 @@ class OberConfig:
             self.install_path / "etc" / "haproxy",
             self.install_path / "etc" / "bgp",
             self.install_path / "etc" / "certs",
-            self.install_path / "bin",
         ]
-        # Only create venv dir if not using an external venv (e.g., pipx)
+        # Only create bin and venv dirs if not using an external venv (e.g., pipx)
         if self._venv_path_override is None:
+            dirs.append(self.install_path / "bin")
             dirs.append(self.install_path / "venv")
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
