@@ -108,6 +108,8 @@ def config(ctx: click.Context, dry_run: bool) -> None:
             console.print()
             console.print("[bold green]Configuration applied![/bold green]")
             console.print()
+            _print_config_files(config)
+            console.print()
             console.print("Next steps:")
             console.print("  1. Run [bold]ober test[/bold] to validate BGP connectivity")
             console.print("  2. Run [bold]ober start[/bold] to start services")
@@ -510,6 +512,19 @@ def _list_route53_hosted_zones_with_creds(
         pass
 
     return []
+
+
+def _print_config_files(config: OberConfig) -> None:
+    """Print configuration files and service information."""
+    console.print("[cyan]Configuration Files:[/cyan]")
+    console.print(f"  Ober config:    {config.config_path}")
+    console.print(f"  HAProxy config: {config.haproxy_config_path}")
+    console.print(f"  ExaBGP config:  {config.bgp_config_path}")
+
+    console.print()
+    console.print("[cyan]Systemd Services:[/cyan]")
+    console.print("  ober-http.service (HAProxy)")
+    console.print("  ober-bgp.service (ExaBGP)")
 
 
 def _configure_additional(log_retention: int, stats_port: int) -> tuple[int, int]:
