@@ -32,8 +32,14 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 
 ### 2. Install
 
+**One-liner (recommended):**
 ```bash
-# Become root and install
+curl -fsSL https://raw.githubusercontent.com/dirkpetersen/ober/main/install.sh | sudo bash
+sudo ober bootstrap
+```
+
+**Manual install:**
+```bash
 sudo su -
 apt install -y pipx
 pipx ensurepath
