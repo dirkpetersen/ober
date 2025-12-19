@@ -107,8 +107,8 @@ def bootstrap(ctx: click.Context, path: str | None, yes: bool) -> None:
     Automatically installs HAProxy, ExaBGP, applies kernel tuning,
     and generates configuration templates.
 
-    If ober is installed via pipx, ExaBGP will be installed in the same venv.
-    Otherwise, a new venv will be created at /opt/ober (or PATH if specified).
+    If ober is installed via pipx, ExaBGP and configs will be in the same venv.
+    Otherwise, you will be prompted for an installation path (or use PATH argument).
     """
     parent_ctx = ctx.obj
     system = parent_ctx.system if parent_ctx else SystemInfo()
@@ -136,8 +136,24 @@ def bootstrap(ctx: click.Context, path: str | None, yes: bool) -> None:
         console.print(f"[bold]Detected venv:[/bold] {venv_path}")
         console.print("ExaBGP and configs will be installed in the existing venv.")
     else:
-        # Not in a venv, need to create one at /opt/ober (or custom path)
-        install_path = Path(path) if path else Path("/opt/ober")
+        # Not in a venv, prompt for install path
+        if path:
+            install_path = Path(path)
+        else:
+            # Prompt user for installation path
+            if yes:
+                console.print("[red]Error:[/red] --yes/-y requires PATH argument when not in venv")
+                console.print("Usage: sudo ober bootstrap /path/to/install -y")
+                ctx.exit(1)
+
+            console.print()
+            console.print("[bold]Installation Path Required[/bold]")
+            console.print("Ober is not running in a venv (e.g., pipx).")
+            console.print("Please specify where to install ober (venv + configs).")
+            console.print()
+            install_input = click.prompt("Installation path", default="/srv/ober", type=str)
+            install_path = Path(install_input)
+
         venv_path = install_path / "venv"
         console.print(f"[bold]Installation path:[/bold] {install_path}")
         console.print(f"[bold]Venv path:[/bold] {venv_path}")
@@ -321,7 +337,7 @@ frontend stats
 
 # S3 Frontend - Configure with 'ober config'
 # frontend s3_front
-#     bind *:443 ssl crt /opt/ober/etc/certs/server.pem
+#     bind *:443 ssl crt {config.certs_path}/server.pem
 #     default_backend s3_back
 
 # S3 Backend - Configure with 'ober config'

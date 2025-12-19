@@ -99,11 +99,18 @@ Critical relationship: `ober-bgp.service` has `BindsTo=ober-http.service`. If HA
 - BGP-related code unit tested with mocked ExaBGP
 - Minimum coverage: 50%
 
-### Key Paths (default installation)
-- `/opt/ober/etc/ober.yaml` - Main config
-- `/opt/ober/etc/haproxy/haproxy.cfg` - HAProxy config
-- `/opt/ober/etc/bgp/config.ini` - ExaBGP config
-- `/opt/ober/etc/certs/` - SSL certificates
+### Key Paths
+With pipx (recommended):
+- `~/.local/pipx/venvs/herr-ober/etc/ober.yaml` - Main config
+- `~/.local/pipx/venvs/herr-ober/etc/haproxy/haproxy.cfg` - HAProxy config
+- `~/.local/pipx/venvs/herr-ober/etc/bgp/config.ini` - ExaBGP config
+- `~/.local/pipx/venvs/herr-ober/etc/certs/` - SSL certificates
+
+With custom installation (prompted during bootstrap):
+- `<install-path>/etc/ober.yaml` - Main config
+- `<install-path>/etc/haproxy/haproxy.cfg` - HAProxy config
+- `<install-path>/etc/bgp/config.ini` - ExaBGP config
+- `<install-path>/etc/certs/` - SSL certificates
 
 ### Systemd Services
 - `ober-http.service` - HAProxy

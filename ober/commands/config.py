@@ -323,9 +323,15 @@ def _configure_certs(current: CertConfig) -> CertConfig:
         raise KeyboardInterrupt
 
     if answers["cert_method"] == "file":
+        # Get default cert path from config
+        from ober.config import OberConfig
+
+        config = OberConfig.load()
+        default_cert_path = str(config.certs_path / "server.pem")
+
         cert_path = inquirer.text(
             message="Certificate file path (PEM format, must include private key)",
-            default=current.path or "/opt/ober/etc/certs/server.pem",
+            default=current.path or default_cert_path,
         )
         return CertConfig(path=cert_path)
 

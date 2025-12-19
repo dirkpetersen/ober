@@ -199,7 +199,7 @@ def get_exabgp_version() -> str | None:
     Checks multiple locations in order:
     1. Current venv (sys.prefix) - handles pipx installs
     2. The venv_path from ober config (if it exists)
-    3. Default /opt/ober/venv
+    3. Fallback paths (~/.ober/venv, /srv/ober/venv)
     4. System exabgp command
     """
     pip_paths: list[Path] = []
@@ -214,8 +214,8 @@ def get_exabgp_version() -> str | None:
         import yaml
 
         config_paths = [
-            Path("/opt/ober/etc/ober.yaml"),
             Path.home() / ".ober" / "ober.yaml",
+            Path("/srv/ober/etc/ober.yaml"),
         ]
         for config_path in config_paths:
             if config_path.exists():
@@ -230,8 +230,8 @@ def get_exabgp_version() -> str | None:
     # Add fallback paths
     pip_paths.extend(
         [
-            Path("/opt/ober/venv/bin/pip"),
             Path.home() / ".ober" / "venv" / "bin" / "pip",
+            Path("/srv/ober/venv/bin/pip"),
         ]
     )
 

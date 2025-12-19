@@ -1271,7 +1271,7 @@ class TestStatusCommandEdgeCases:
 
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
-            config_mock.config_path = Path("/opt/ober/etc/ober.yaml")
+            config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = True
             config_mock.bgp_config_path.exists.return_value = True
             config_mock.vips = [VIPConfig(address="10.0.100.1")]
@@ -1300,7 +1300,7 @@ class TestStatusCommandEdgeCases:
 
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
-            config_mock.config_path = Path("/opt/ober/etc/ober.yaml")
+            config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = True
             config_mock.bgp_config_path.exists.return_value = True
             config_mock.vips = [VIPConfig(address="10.0.100.1/32")]
@@ -1902,7 +1902,7 @@ class TestStatusNoConfig:
 
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = False
-            config_mock.config_path = Path("/opt/ober/etc/ober.yaml")
+            config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = False
             config_mock.bgp_config_path.exists.return_value = False
             config_mock.vips = []
@@ -1939,7 +1939,7 @@ class TestPrintStatus:
             "services": {"ober-http": {"active": True}},
             "haproxy": {"version": "3.3.0"},
             "bgp": {"version": "4.2.21", "announced_routes": ["10.0.100.1"]},
-            "config": {"exists": True, "path": "/opt/ober/etc/ober.yaml", "vips": ["10.0.100.1"]},
+            "config": {"exists": True, "path": "~/.ober/etc/ober.yaml", "vips": ["10.0.100.1"]},
         }
 
         http_service = MagicMock()
@@ -1979,7 +1979,7 @@ class TestStatusJsonOutput:
 
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
-            config_mock.config_path = Path("/opt/ober/etc/ober.yaml")
+            config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = True
             config_mock.bgp_config_path.exists.return_value = True
             config_mock.vips = [VIPConfig(address="10.0.100.1")]

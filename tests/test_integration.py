@@ -29,7 +29,7 @@ class TestConfigGeneration:
                 health_check_interval=1000,
             )
         ]
-        temp_config.certs = CertConfig(path="/opt/ober/etc/certs/server.pem")
+        temp_config.certs = CertConfig(path="~/.ober/etc/certs/server.pem")
         temp_config.stats_port = 8404
 
         _generate_haproxy_config(temp_config)

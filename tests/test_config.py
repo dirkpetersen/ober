@@ -91,7 +91,7 @@ class TestOberConfig:
     def test_default_values(self) -> None:
         """Test OberConfig default values."""
         config = OberConfig()
-        assert config.install_path == Path("/opt/ober")
+        assert config.install_path == Path.home() / ".ober"
         assert config.log_retention_days == 7
         assert config.stats_port == 8404
 
@@ -204,7 +204,7 @@ class TestOberConfigLoadFromFile:
         """Test loading a complete configuration file."""
         config_path = temp_dir / "ober.yaml"
         config_path.write_text("""
-install_path: /opt/ober
+install_path: ~/.ober
 bgp:
   local_as: 65100
   peer_as: 65200
@@ -228,7 +228,7 @@ backends:
     health_check_path: /health
     health_check_interval: 500
 certs:
-  path: /opt/ober/etc/certs/server.pem
+  path: ~/.ober/etc/certs/server.pem
   acme_enabled: true
   acme_email: admin@example.com
 log_retention_days: 30
@@ -237,7 +237,7 @@ stats_port: 9000
 
         config = OberConfig.load(config_path)
 
-        assert config.install_path == Path("/opt/ober")
+        assert config.install_path == Path.home() / ".ober"
         assert config.bgp.local_as == 65100
         assert config.bgp.peer_as == 65200
         assert config.bgp.neighbors == ["10.0.0.1", "10.0.0.2"]
@@ -251,7 +251,7 @@ stats_port: 9000
         assert len(config.backends) == 1
         assert config.backends[0].name == "s3_primary"
         assert config.backends[0].health_check_interval == 500
-        assert config.certs.path == "/opt/ober/etc/certs/server.pem"
+        assert config.certs.path == "~/.ober/etc/certs/server.pem"
         assert config.certs.acme_enabled is True
         assert config.certs.acme_email == "admin@example.com"
         assert config.log_retention_days == 30
@@ -282,7 +282,7 @@ bgp:
         config = OberConfig.load(config_path)
 
         # All values should be defaults
-        assert config.install_path == Path("/opt/ober")
+        assert config.install_path == Path.home() / ".ober"
         assert config.bgp.local_as == 65001
 
     def test_load_searches_default_paths(self, temp_dir: Path) -> None:

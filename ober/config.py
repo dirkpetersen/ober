@@ -58,7 +58,7 @@ class CertConfig:
 class OberConfig:
     """Main Ober configuration."""
 
-    install_path: Path = field(default_factory=lambda: Path("/opt/ober"))
+    install_path: Path = field(default_factory=lambda: Path.home() / ".ober")
     bgp: BGPConfig = field(default_factory=BGPConfig)
     vips: list[VIPConfig] = field(default_factory=list)
     backends: list[BackendConfig] = field(default_factory=list)
@@ -114,8 +114,8 @@ class OberConfig:
         if path is None:
             # Search default locations
             search_paths = [
-                Path("/opt/ober/etc/ober.yaml"),
                 Path.home() / ".ober" / "ober.yaml",
+                Path("/srv/ober/etc/ober.yaml"),
             ]
             for p in search_paths:
                 if p.exists():
@@ -133,7 +133,7 @@ class OberConfig:
             data = yaml.safe_load(f) or {}
 
         if "install_path" in data:
-            self.install_path = Path(data["install_path"])
+            self.install_path = Path(data["install_path"]).expanduser()
 
         if "bgp" in data:
             bgp_data = data["bgp"]
