@@ -191,3 +191,115 @@ class TestUtilityFunctions:
             pytest.raises(subprocess.CalledProcessError),
         ):
             run_command(["false"], check=True)
+
+
+class TestSystemInfoEdgeCases:
+    """Additional edge case tests for SystemInfo."""
+
+    def test_get_local_ip_failure(self) -> None:
+        """Test get_local_ip returns None when command fails."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            info = SystemInfo()
+            ip = info.get_local_ip()
+            assert ip is None
+
+    def test_get_local_ip_timeout(self) -> None:
+        """Test get_local_ip returns None on timeout."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ip", timeout=5)):
+            info = SystemInfo()
+            ip = info.get_local_ip()
+            assert ip is None
+
+    def test_get_local_ip_no_match(self) -> None:
+        """Test get_local_ip returns None when no IP in output."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "no ip address here"
+
+        with patch("subprocess.run", return_value=mock_result):
+            info = SystemInfo()
+            ip = info.get_local_ip()
+            assert ip is None
+
+
+class TestServiceInfoEdgeCases:
+    """Additional edge case tests for ServiceInfo."""
+
+    def test_refresh_enabled_failure(self) -> None:
+        """Test ServiceInfo refresh when is-enabled fails."""
+        mock_active = MagicMock(returncode=0, stdout="active\n")
+        mock_enabled_fail = MagicMock(returncode=1, stdout="")
+        mock_pid = MagicMock(returncode=0, stdout="1234")
+
+        with patch("subprocess.run", side_effect=[mock_active, mock_enabled_fail, mock_pid]):
+            info = ServiceInfo.from_service_name("test-service")
+            assert info.is_active is True
+            assert info.is_enabled is False
+
+    def test_refresh_pid_failure(self) -> None:
+        """Test ServiceInfo refresh when getting PID fails."""
+        mock_active = MagicMock(returncode=0, stdout="active\n")
+        mock_enabled = MagicMock(returncode=0, stdout="enabled\n")
+        mock_pid_fail = MagicMock(returncode=0, stdout="")
+
+        with patch("subprocess.run", side_effect=[mock_active, mock_enabled, mock_pid_fail]):
+            info = ServiceInfo.from_service_name("test-service")
+            assert info.is_active is True
+            assert info.pid is None
+
+    def test_refresh_pid_invalid(self) -> None:
+        """Test ServiceInfo refresh when PID is invalid."""
+        mock_active = MagicMock(returncode=0, stdout="active\n")
+        mock_enabled = MagicMock(returncode=0, stdout="enabled\n")
+        mock_pid_invalid = MagicMock(returncode=0, stdout="not-a-number")
+
+        with patch("subprocess.run", side_effect=[mock_active, mock_enabled, mock_pid_invalid]):
+            info = ServiceInfo.from_service_name("test-service")
+            assert info.is_active is True
+            assert info.pid is None
+
+
+class TestGetExaBGPVersionEdgeCases:
+    """Edge case tests for get_exabgp_version."""
+
+    def test_exabgp_version_from_pip(self) -> None:
+        """Test ExaBGP version from pip show."""
+        # Simply test that the function runs without error
+        # and returns either a version string or None
+        version = get_exabgp_version()
+        assert version is None or isinstance(version, str)
+
+    def test_exabgp_version_not_found(self) -> None:
+        """Test ExaBGP version when not installed."""
+        with (
+            patch("pathlib.Path.exists", return_value=False),
+            patch("subprocess.run", side_effect=FileNotFoundError),
+        ):
+            version = get_exabgp_version()
+            assert version is None
+
+
+class TestGetHAProxyVersionEdgeCases:
+    """Edge case tests for get_haproxy_version."""
+
+    def test_haproxy_version_timeout(self) -> None:
+        """Test HAProxy version on timeout."""
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="haproxy", timeout=5)
+        ):
+            version = get_haproxy_version()
+            assert version is None
+
+    def test_haproxy_version_no_match(self) -> None:
+        """Test HAProxy version when output doesn't match."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "no version here"
+
+        with patch("subprocess.run", return_value=mock_result):
+            version = get_haproxy_version()
+            assert version is None

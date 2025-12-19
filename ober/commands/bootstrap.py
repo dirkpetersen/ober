@@ -214,6 +214,7 @@ def _setup_venv(venv_path: Path) -> None:
         # Clear any empty/invalid venv directory
         if venv_path.exists():
             import shutil
+
             shutil.rmtree(venv_path)
         venv.create(venv_path, with_pip=True)
 

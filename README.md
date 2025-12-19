@@ -1,5 +1,11 @@
 # Herr Ober
 
+[![PyPI version](https://badge.fury.io/py/herr-ober.svg)](https://badge.fury.io/py/herr-ober)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://github.com/dirkpetersen/ober/actions/workflows/test.yml/badge.svg)](https://github.com/dirkpetersen/ober/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/dirkpetersen/ober/branch/main/graph/badge.svg)](https://codecov.io/gh/dirkpetersen/ober)
+
 **High-Performance S3 Ingress Controller (BGP/ECMP)**
 
 Herr Ober ("Head Waiter") is a lightweight, high-throughput (50GB/s+) ingress controller designed for Ceph RGW clusters. It uses **HAProxy 3.3 (AWS-LC)** for SSL offloading and **ExaBGP** for Layer 3 High Availability via ECMP.
@@ -28,13 +34,13 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 
 ```bash
 # Install via pipx (recommended)
-pipx install ober
+pipx install herr-ober
 
 # Or via pip
-pip install ober
+pip install herr-ober
 
 # Or via uv
-uv pip install ober
+uv pip install herr-ober
 ```
 
 ### 3. Bootstrap
