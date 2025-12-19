@@ -16,7 +16,7 @@ Herr Ober ("Head Waiter") is a lightweight, high-throughput (50GB/s+) ingress co
 
 ## Documentation
 
-For deep internals, kernel tuning, and failure recovery logic, see **[architecture.md](architecture.md)**.
+For deep internals, kernel tuning, and failure recovery logic, see **[architecture.md](https://github.com/dirkpetersen/ober/blob/main/architecture.md)**.
 
 ---
 
@@ -123,7 +123,7 @@ curl http://127.0.0.1:8404/health
 | **HAProxy Crash** | BGP withdraws immediately (`BindsTo=`) |
 | **Network Cut** | BFD detects and tears down route (~150ms) |
 
-See [architecture.md](architecture.md) for detailed failure scenarios.
+See [architecture.md](https://github.com/dirkpetersen/ober/blob/main/architecture.md) for detailed failure scenarios.
 
 ---
 
