@@ -2,9 +2,6 @@
 """Ober CLI - High-performance S3 ingress controller."""
 
 import json
-import os
-import sys
-from pathlib import Path
 from typing import Any
 
 import click
@@ -61,46 +58,6 @@ class Context:
 
 
 pass_context = click.make_pass_decorator(Context, ensure=True)
-
-
-def _ensure_ober_symlink() -> None:
-    """Create /usr/local/bin/ober symlink if running as root.
-
-    This is called on every CLI invocation when running as root.
-    It ensures 'sudo ober' works even before bootstrap is run.
-    """
-    if os.geteuid() != 0:
-        return
-
-    symlink_path = Path("/usr/local/bin/ober")
-
-    # Find the current ober binary location
-    # sys.argv[0] might be the script path or just 'ober'
-    if sys.prefix != sys.base_prefix:
-        # Running in a venv (pipx, etc.)
-        ober_bin = Path(sys.prefix) / "bin" / "ober"
-    else:
-        # Not in a venv, try to find it
-        return
-
-    if not ober_bin.exists():
-        return
-
-    # Check if symlink already points to the right place
-    if symlink_path.is_symlink():
-        try:
-            if symlink_path.resolve() == ober_bin.resolve():
-                return  # Already correct
-        except OSError:
-            pass
-
-    # Create or update symlink
-    try:
-        if symlink_path.exists() or symlink_path.is_symlink():
-            symlink_path.unlink()
-        symlink_path.symlink_to(ober_bin)
-    except OSError:
-        pass  # Silently fail if we can't create the symlink
 
 
 def version_callback(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -162,9 +119,6 @@ def main(ctx: Context, json_output: bool, quiet: bool, verbose: bool) -> None:
     ctx.json_output = json_output
     ctx.quiet = quiet
     ctx.verbose = verbose
-
-    # Ensure /usr/local/bin/ober symlink exists when running as root
-    _ensure_ober_symlink()
 
     # Load config if it exists
     ctx.config = OberConfig.load()

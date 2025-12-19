@@ -36,10 +36,12 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 # Install via pipx (recommended)
 sudo apt install -y pipx
 sudo pipx install herr-ober
+sudo ober-install-wrapper   # Creates /usr/local/bin/ober
 
 # Or via pip in a venv
 sudo python3 -m venv /opt/ober/venv
 sudo /opt/ober/venv/bin/pip install herr-ober
+sudo /opt/ober/venv/bin/ober-install-wrapper
 ```
 
 ### 3. Bootstrap
@@ -47,11 +49,7 @@ sudo /opt/ober/venv/bin/pip install herr-ober
 Run as root. Automatically installs HAProxy, ExaBGP, applies kernel tuning, and generates all configs.
 
 ```bash
-# First run requires full path (creates /usr/local/bin/ober symlink)
-sudo /root/.local/bin/ober bootstrap
-
-# All subsequent commands work with just 'sudo ober'
-sudo ober status
+sudo ober bootstrap
 ```
 
 ### 4. Configure

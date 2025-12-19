@@ -205,11 +205,6 @@ def bootstrap(ctx: click.Context, path: str | None, yes: bool) -> None:
         _configure_watchdog()
         progress.update(task, completed=True, description="[green]Configured watchdog[/green]")
 
-        # Step 8: Create/update symlink in /usr/local/bin
-        task = progress.add_task("Creating ober symlink...", total=None)
-        _create_ober_symlink(venv_path)
-        progress.update(task, completed=True, description="[green]Created ober symlink[/green]")
-
     console.print()
     console.print("[bold green]Bootstrap complete![/bold green]")
     console.print()
@@ -377,24 +372,3 @@ def _configure_watchdog() -> None:
                 f.write("\n# Herr Ober watchdog settings\n")
                 f.write("RuntimeWatchdogSec=10s\n")
                 f.write("ShutdownWatchdogSec=2min\n")
-
-
-def _create_ober_symlink(venv_path: Path) -> None:
-    """Create/update symlink to ober in /usr/local/bin.
-
-    This ensures 'sudo ober' works regardless of where ober is installed
-    (pipx, custom venv, etc.).
-    """
-    ober_bin = venv_path / "bin" / "ober"
-    symlink_path = Path("/usr/local/bin/ober")
-
-    # Only create symlink if ober binary exists in the venv
-    if not ober_bin.exists():
-        return
-
-    # Remove existing symlink or file if it exists
-    if symlink_path.exists() or symlink_path.is_symlink():
-        symlink_path.unlink()
-
-    # Create new symlink
-    symlink_path.symlink_to(ober_bin)
