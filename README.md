@@ -34,7 +34,8 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 
 ```bash
 # Install via pipx (recommended)
-pipx install herr-ober
+sudo apt install -y pipx
+sudo pipx install herr-ober
 
 # Or via pip
 pip install herr-ober
