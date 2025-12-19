@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Ober config command - interactive configuration wizard."""
 
+import os
 import socket
 from pathlib import Path
 
@@ -18,6 +19,30 @@ from ober.config import (
 from ober.system import SystemInfo
 
 console = Console()
+
+
+def _get_aws_credentials_path() -> Path:
+    """Get path to AWS credentials file, checking both current user and sudo user."""
+    # First try current user's home
+    current_creds = Path.home() / ".aws" / "credentials"
+    if current_creds.exists():
+        return current_creds
+
+    # If running via sudo, try the original user's home
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        import pwd
+
+        try:
+            user_info = pwd.getpwnam(sudo_user)
+            sudo_creds = Path(user_info.pw_dir) / ".aws" / "credentials"
+            if sudo_creds.exists():
+                return sudo_creds
+        except KeyError:
+            pass
+
+    # Fallback to standard location
+    return Path.home() / ".aws" / "credentials"
 
 
 @click.command()
@@ -500,8 +525,17 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
     console.print("[yellow]Trying boto3...[/yellow]")
     try:
         import boto3  # type: ignore[import-untyped]
+        from botocore.session import Session as BotocoreSession
 
-        session = boto3.Session(profile_name=profile)
+        # Use explicit credentials file path to handle sudo scenarios
+        creds_file = _get_aws_credentials_path()
+        console.print(f"[yellow]Using credentials from: {creds_file}[/yellow]")
+
+        # Create botocore session pointing to the right credentials file
+        botocore_session = BotocoreSession()
+        botocore_session.set_config_variable("credentials_file", str(creds_file))
+
+        session = boto3.Session(profile_name=profile, botocore_session=botocore_session)
         client = session.client("route53")
         response = client.list_hosted_zones()
         zones = []
