@@ -47,10 +47,10 @@ sudo /opt/ober/venv/bin/pip install herr-ober
 Run as root. Automatically installs HAProxy, ExaBGP, applies kernel tuning, and generates all configs.
 
 ```bash
-# First run (use full path for pipx install)
+# First run requires full path (creates /usr/local/bin/ober symlink)
 sudo /root/.local/bin/ober bootstrap
 
-# After bootstrap, 'sudo ober' works (symlink created in /usr/local/bin)
+# All subsequent commands work with just 'sudo ober'
 sudo ober status
 ```
 
