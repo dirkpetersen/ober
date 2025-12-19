@@ -33,25 +33,14 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 ### 2. Install
 
 ```bash
-# Install via pipx (recommended)
-sudo apt install -y pipx
-sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install pipx
-sudo /usr/local/bin/pipx install --global herr-ober
-
-# Or via uv (alternative)
-curl -LsSf https://astral.sh/uv/install.sh | sudo sh
-sudo uv tool install herr-ober
+# Become root and install
+sudo su -
+apt install -y pipx
+pipx install herr-ober
+ober bootstrap
 ```
 
-### 3. Bootstrap
-
-Run as root. Automatically installs HAProxy, ExaBGP, applies kernel tuning, and generates all configs.
-
-```bash
-sudo ober bootstrap
-```
-
-### 4. Configure
+### 3. Configure
 
 Interactive wizard to set up BGP, VIPs, backends, and certificates.
 
@@ -59,7 +48,7 @@ Interactive wizard to set up BGP, VIPs, backends, and certificates.
 sudo ober config
 ```
 
-### 5. Verify
+### 4. Verify
 
 ```bash
 # Check prerequisites and configuration
