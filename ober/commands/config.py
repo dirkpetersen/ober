@@ -317,8 +317,13 @@ def _configure_certs(current: CertConfig) -> CertConfig:
 
 def _ensure_boto3_installed() -> bool:
     """Ensure boto3 is installed, install if needed."""
+    import subprocess
+    import sys
+
+    # Check if boto3 is already available
     try:
         import boto3  # type: ignore[import-untyped] # noqa: F401
+        console.print("[green]boto3 already installed[/green]")
         return True
     except ImportError:
         pass
@@ -326,9 +331,6 @@ def _ensure_boto3_installed() -> bool:
     # Try to install boto3
     console.print("[yellow]Installing boto3...[/yellow]")
     try:
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--upgrade", "boto3"],
             capture_output=True,
@@ -337,10 +339,23 @@ def _ensure_boto3_installed() -> bool:
         )
         if result.returncode == 0:
             console.print("[green]boto3 installed successfully[/green]")
-            return True
+
+            # Verify installation by importing
+            try:
+                import boto3 as _boto3  # type: ignore[import-untyped] # noqa: F401
+                console.print("[green]boto3 import verified[/green]")
+                return True
+            except ImportError as e:
+                console.print(f"[red]boto3 installed but import failed: {e}[/red]")
+                return False
         else:
             console.print("[red]Failed to install boto3[/red]")
+            console.print(f"[yellow]Command:[/yellow] {sys.executable} -m pip install --upgrade boto3")
+            if result.stdout:
+                console.print("[yellow]stdout:[/yellow]")
+                console.print(result.stdout)
             if result.stderr:
+                console.print("[yellow]stderr:[/yellow]")
                 console.print(result.stderr)
             return False
     except Exception as e:
@@ -444,8 +459,8 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
     """List Route53 hosted zones using AWS CLI or boto3."""
     import subprocess
 
+    # Try using AWS CLI first (doesn't require boto3 installed)
     try:
-        # Try using AWS CLI first (doesn't require boto3 installed)
         result = subprocess.run(
             ["aws", "route53", "list-hosted-zones", "--profile", profile, "--output", "json"],
             capture_output=True,
@@ -463,11 +478,19 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
                     "Id": zone_id,
                     "Name": zone["Name"],
                 })
+            console.print(f"[green]Found {len(zones)} hosted zone(s) via AWS CLI[/green]")
             return zones
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        pass
+        else:
+            console.print(f"[yellow]AWS CLI failed:[/yellow] {result.stderr}")
+    except FileNotFoundError:
+        console.print("[yellow]AWS CLI not found in PATH[/yellow]")
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]AWS CLI timeout[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]AWS CLI error: {e}[/yellow]")
 
     # Fallback: try boto3 if available
+    console.print("[yellow]Trying boto3...[/yellow]")
     try:
         import boto3  # type: ignore[import-untyped]
         session = boto3.Session(profile_name=profile)
@@ -480,10 +503,13 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
                 "Id": zone_id,
                 "Name": zone["Name"],
             })
+        console.print(f"[green]Found {len(zones)} hosted zone(s) via boto3[/green]")
         return zones
-    except Exception:
-        pass
+    except Exception as e:
+        console.print(f"[yellow]boto3 error: {e}[/yellow]")
 
+    console.print("[yellow]Warning:[/yellow] Could not list Route53 hosted zones.")
+    console.print("[yellow]You can enter the hosted zone ID manually.[/yellow]")
     return []
 
 
@@ -507,9 +533,10 @@ def _list_route53_hosted_zones_with_creds(
                 "Id": zone_id,
                 "Name": zone["Name"],
             })
+        console.print(f"[green]Found {len(zones)} hosted zone(s) with manual credentials[/green]")
         return zones
-    except Exception:
-        pass
+    except Exception as e:
+        console.print(f"[yellow]boto3 error with manual credentials: {e}[/yellow]")
 
     return []
 
