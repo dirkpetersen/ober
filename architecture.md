@@ -243,12 +243,125 @@ BGP passwords and other sensitive data. Permissions: 600.
 
 ---
 
-## 7. Deployment Checklist
+## 7. HAProxy Implementation Details
+
+### Protocol & Limits
+- **HTTP/1.1 only** (no HTTP/2 support)
+- **No request size limits** - unlimited for large S3 uploads
+- **No access logging** - rely on Ceph RGW logs
+- **No rate limiting** - handled by Ceph
+
+### Certificate Management
+- Certs provided via `--cert <path>` or HAProxy's built-in ACME support
+- **Auto-reload**: Uses inotify (watchdog library) to detect cert changes and trigger graceful reload
+
+### Open Questions
+- S3 header handling (Host, Authorization, x-amz-*) may need future work
+
+---
+
+## 8. CLI Implementation Details
+
+### Global Flags
+- `--version` - Show ober version plus installed HAProxy/ExaBGP versions
+- `--json` - JSON output for scripting
+- `-q` / `--quiet` - Minimal output
+- `-v` / `--verbose` - Detailed output
+
+### Output & Errors
+- Colored output when terminal supports it (using `rich` library)
+- Error messages should be helpful with fix suggestions (e.g., "BGP neighbor unreachable. Check firewall rules on port 179")
+- Exit codes: 0 for success, 1 for error
+
+### Graceful Shutdown (`ober stop`)
+1. Withdraw BGP routes
+2. Wait for connections to drain
+3. Stop HAProxy
+
+### Signal Handling
+- `ober health` handles SIGTERM/SIGINT gracefully
+
+### Validation
+- `ober sync` validates that hostnames/IPs resolve before updating whitelists
+- `ober config` validates BGP neighbor reachability, RGW backend connectivity, certificate validity
+
+### Config Wizard (`ober config`)
+- Uses [python-inquirer](https://python-inquirer.readthedocs.io/en/latest/) for interactive prompts
+- Grouped sections: BGP → VIP → Backends → Certs → Logging
+- Allows skipping already-configured sections
+- Auto-detects local IP and pre-fills defaults
+- `--dry-run` to preview changes without applying
+
+### Destructive Operations
+- `ober uninstall` requires interactive confirmation
+- If `ober bootstrap` fails midway, run `ober uninstall` before retrying
+
+---
+
+## 9. Network & Runtime Behavior
+
+- **IPv4 only** - no IPv6 support
+- **DNS resolution at runtime** - hostnames resolved when needed, not cached
+- **Network timeouts** - aggressive values for high-performance networks (<1ms latency), not user-configurable
+- **Download failures** - fail immediately (no retry logic)
+- **No offline/proxy support** - assumes internet access
+- **Services run as root**
+
+---
+
+## 10. Development & Packaging
+
+### Package Info
+- **PyPI name:** `ober`
+- **GitHub:** https://github.com/dirkpetersen/ober
+- **Initial version:** 0.1.0
+- **Versioning:** Semantic versioning (semver)
+- **License:** MIT
+- **PyPI classifiers:** Development Status :: 4 - Beta, Framework :: HAProxy
+
+### Python Requirements
+- **Python 3.12+** required
+- **Shebang:** `#!/usr/bin/env python3`
+
+### Dependencies (Runtime)
+- `click` - CLI framework
+- `python-inquirer` - Interactive prompts
+- `rich` - Colored output, tables, progress bars
+- `hostlist` - Slurm hostlist expansion
+- `requests` - Health checks
+- `pyyaml` - Config file handling
+- `watchdog` - inotify for certificate file watching
+
+### Dev Dependencies (`[dev]` extra)
+- `pytest`, `pytest-cov` - Testing
+- `ruff` - Linting and formatting
+- `mypy` - Type checking
+
+### Code Style
+- **Docstrings:** Google style
+- **Type annotations:** Required throughout
+- **Linting/Formatting:** ruff
+
+### Testing & CI
+- **Framework:** pytest with mocked system calls
+- **CI:** GitHub Actions
+- **Auto-publish:** To PyPI on GitHub release tags
+- **Type checking:** mypy in CI
+- **Minimum coverage:** 50%
+
+### Package Usage
+- CLI: `ober <command>`
+- Importable for scripting: `from ober import ...`
+
+---
+
+## 11. Deployment Checklist
 
 1. **Proxmox:** Add `Intel 6300ESB` Watchdog device to VM.
 2. **Network:** Verify `virtio` Multiqueue is active.
 3. **Install:** `pipx install ober`
 4. **Bootstrap:** `sudo ober bootstrap` (installs HAProxy, ExaBGP, applies tuning)
 5. **Configure:** `sudo ober config` (interactive wizard)
-6. **Verify:** `ober doctor` and `ober status`
-7. **Router:** Configure ECMP and BGP Neighbors (enable BFD).
+6. **Test:** `ober test` (validate BGP connectivity without starting services)
+7. **Verify:** `ober doctor` and `ober status`
+8. **Router:** Configure ECMP and BGP Neighbors (enable BFD).
