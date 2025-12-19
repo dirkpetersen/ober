@@ -36,6 +36,8 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 # Become root and install
 sudo su -
 apt install -y pipx
+pipx ensurepath
+source ~/.bashrc
 pipx install herr-ober
 ober bootstrap
 ```
