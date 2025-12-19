@@ -196,14 +196,20 @@ def get_haproxy_version() -> str | None:
 def get_exabgp_version() -> str | None:
     """Get installed ExaBGP version.
 
-    Checks multiple locations:
-    1. The venv_path from ober config (if it exists)
-    2. Default /opt/ober/venv
-    3. System exabgp command
+    Checks multiple locations in order:
+    1. Current venv (sys.prefix) - handles pipx installs
+    2. The venv_path from ober config (if it exists)
+    3. Default /opt/ober/venv
+    4. System exabgp command
     """
     pip_paths: list[Path] = []
 
-    # First, try to load venv_path from config
+    # First, check the current venv (if running in one, e.g., pipx)
+    if sys.prefix != sys.base_prefix:
+        current_venv = Path(sys.prefix)
+        pip_paths.append(current_venv / "bin" / "pip")
+
+    # Then try to load venv_path from config
     try:
         import yaml
 
@@ -230,10 +236,21 @@ def get_exabgp_version() -> str | None:
     )
 
     for pip_path in pip_paths:
+        # Get the venv's bin directory
+        bin_dir = pip_path.parent
+        python_path = bin_dir / "python"
+
+        # Try pip binary first, then fall back to python -m pip (for pipx venvs)
+        commands = []
         if pip_path.exists():
+            commands.append([str(pip_path), "show", "exabgp"])
+        if python_path.exists():
+            commands.append([str(python_path), "-m", "pip", "show", "exabgp"])
+
+        for cmd in commands:
             try:
                 result = subprocess.run(
-                    [str(pip_path), "show", "exabgp"],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=5,

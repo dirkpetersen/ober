@@ -3,6 +3,7 @@
 
 import contextlib
 import shutil
+import sys
 from pathlib import Path
 
 import click
@@ -10,9 +11,21 @@ import inquirer  # type: ignore[import-untyped]
 from rich.console import Console
 
 from ober.config import OberConfig
-from ober.system import ServiceInfo, SystemInfo, run_command
+from ober.system import ServiceInfo, SystemInfo, check_command_exists, run_command
 
 console = Console()
+
+
+def _is_pipx_install() -> Path | None:
+    """Check if ober is installed via pipx and return the venv path."""
+    if sys.prefix == sys.base_prefix:
+        return None  # Not in a venv
+
+    venv_path = Path(sys.prefix)
+    # Check if this looks like a pipx venv (contains pipx in path)
+    if "pipx" in str(venv_path) and "herr-ober" in str(venv_path):
+        return venv_path
+    return None
 
 
 @click.command()
@@ -46,16 +59,34 @@ def uninstall(ctx: click.Context, yes: bool, keep_config: bool) -> None:
 
     config = OberConfig.load()
 
+    # Check if ober created a local venv (not pipx-managed)
+    local_venv = config.install_path / "venv"
+    has_local_venv = local_venv.exists()
+
+    # Check if installed via pipx
+    pipx_venv = _is_pipx_install()
+    has_pipx = pipx_venv is not None and check_command_exists("pipx")
+
+    # Check for /usr/local/bin/ober symlink
+    ober_symlink = Path("/usr/local/bin/ober")
+    has_symlink = ober_symlink.exists() or ober_symlink.is_symlink()
+
     console.print()
     console.print("[bold yellow]Ober Uninstall[/bold yellow]")
     console.print()
     console.print("This will remove:")
     console.print("  - Systemd services (ober-http, ober-bgp)")
     console.print(f"  - Installation directory: {config.install_path}")
+    if has_local_venv:
+        console.print(f"  - Python venv (with ExaBGP): {local_venv}")
     if not keep_config:
         console.print(f"  - Configuration: {config.config_path}")
     console.print("  - Kernel tuning: /etc/sysctl.d/99-herr-ober.conf")
     console.print("  - VIP interface configuration")
+    if has_symlink:
+        console.print(f"  - Symlink: {ober_symlink}")
+    if has_pipx:
+        console.print(f"  - pipx package: herr-ober ({pipx_venv})")
     console.print()
 
     if not yes:
@@ -130,6 +161,29 @@ def uninstall(ctx: click.Context, yes: bool, keep_config: bool) -> None:
     if secrets_path.exists() and not keep_config:
         shutil.rmtree(secrets_path)
         console.print(f"  [green]Removed {secrets_path}[/green]")
+
+    # Step 7: Remove /usr/local/bin/ober symlink
+    if has_symlink:
+        console.print("Removing symlink...")
+        try:
+            ober_symlink.unlink()
+            console.print(f"  [green]Removed {ober_symlink}[/green]")
+        except OSError as e:
+            console.print(f"  [yellow]Could not remove {ober_symlink}: {e}[/yellow]")
+
+    # Step 8: Remove pipx package (must be last - removes running code!)
+    if has_pipx:
+        console.print("Removing pipx package...")
+        console.print("[bold green]Uninstall complete![/bold green]")
+        if keep_config:
+            console.print()
+            console.print(f"Configuration preserved at: {config.config_path}")
+        # Use subprocess directly to avoid issues after package removal
+        import subprocess
+
+        subprocess.run(["pipx", "uninstall", "herr-ober"], check=False)
+        # Exit immediately - we can't continue after removing ourselves
+        return
 
     console.print()
     console.print("[bold green]Uninstall complete![/bold green]")

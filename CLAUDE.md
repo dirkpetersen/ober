@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Herr Ober ("Head Waiter") is a high-performance S3 ingress controller for Ceph RGW clusters. Uses HAProxy 3.3 (AWS-LC) for SSL offloading and ExaBGP for Layer 3 HA via BGP/ECMP.
 
-- **PyPI package:** `ober`
+- **PyPI package:** `herr-ober` (CLI command: `ober`)
 - **Python:** 3.12+ required
 - **Supported OS:** Ubuntu, Debian, RHEL 10+
 - **Target:** Proxmox VMs achieving 50GB/s+ throughput
@@ -53,39 +53,40 @@ Per-node components:
 
 Critical relationship: `ober-bgp.service` has `BindsTo=ober-http.service`. If HAProxy dies, BGP withdraws immediately.
 
-## Project Structure
+## Code Architecture
 
-```
-ober/
-├── ober/              # Main package (flat layout)
-│   ├── __init__.py
-│   ├── cli.py         # Click commands
-│   └── ...
-├── tests/
-├── pyproject.toml
-└── ...
-```
+**CLI Layer** (`ober/cli.py`):
+- Click-based CLI with `@click.group()` main entry point
+- `Context` class holds shared state (verbose, quiet, json_output, config)
+- Commands registered via `main.add_command()` from `ober/commands/`
 
-## CLI Commands
+**Command Modules** (`ober/commands/`):
+- Each subcommand in separate file: `bootstrap.py`, `config.py`, `status.py`, etc.
+- Commands use `@pass_context` decorator to access shared `Context`
+- Service commands (`start`, `stop`, `restart`) all in `service.py`
 
-Single `ober` command with subcommands. See README.md for usage details.
+**Configuration** (`ober/config.py`):
+- Dataclass-based: `OberConfig` contains `BGPConfig`, `VIPConfig`, `BackendConfig`, `CertConfig`
+- `OberConfig.load()` searches default paths, `OberConfig.save()` writes YAML
+- Properties compute derived paths (`config_path`, `haproxy_config_path`, etc.)
+- Secrets handled separately via `load_secrets()`/`save_secrets()` for `~/.ober/login`
 
-Core commands: `bootstrap`, `config`, `sync`, `status`, `start/stop/restart`, `health`, `logs`, `doctor`, `test`, `upgrade`, `uninstall`
-
-Global flags: `--version`, `--json`, `-q/--quiet`, `-v/--verbose`
+**System Utilities** (`ober/system.py`):
+- `SystemInfo` dataclass auto-detects OS family (DEBIAN/RHEL), version, local IP
+- `ServiceInfo` wraps systemd service queries
+- Helper functions: `get_haproxy_version()`, `get_exabgp_version()`, `run_command()`
 
 ## Key Implementation Notes
 
 ### Code Style
-- Type annotations required throughout
+- Type annotations required throughout (strict mypy config)
 - Google-style docstrings
-- Linting/formatting via ruff (no pre-commit hooks)
+- Linting/formatting via ruff (line length 100)
 
 ### CLI Behavior
 - Exit codes: 0 success, 1 error
 - Uses `click` framework, `rich` for output, `python-inquirer` for prompts
 - Destructive ops (`uninstall`) require confirmation
-- Error messages should suggest fixes
 
 ### Configuration
 - Format: YAML at `<install-path>/etc/ober.yaml`
@@ -95,7 +96,7 @@ Global flags: `--version`, `--json`, `-q/--quiet`, `-v/--verbose`
 ### Testing Strategy
 - Unit tests with mocked system calls
 - Integration tests use `moto[server]` for mock S3 backends
-- BGP-related code unit tested with mocked ExaBGP (can't test real BGP on single host)
+- BGP-related code unit tested with mocked ExaBGP
 - Minimum coverage: 50%
 
 ### Key Paths (default installation)
@@ -107,9 +108,3 @@ Global flags: `--version`, `--json`, `-q/--quiet`, `-v/--verbose`
 ### Systemd Services
 - `ober-http.service` - HAProxy
 - `ober-bgp.service` - ExaBGP (bound to ober-http)
-
-## Dependencies
-
-Runtime: `click`, `python-inquirer`, `rich`, `hostlist`, `requests`, `pyyaml`, `watchdog`
-
-Dev: `pytest`, `pytest-cov`, `moto[server]`, `boto3`, `ruff`, `mypy`
