@@ -1,0 +1,254 @@
+# Project: Herr Ober (The Head Waiter)
+
+**High-Performance S3 Ingress Controller Architecture**
+
+**Target Throughput:** 50GB/s+ (Aggregate)
+**Supported OS:** Ubuntu, Debian, RHEL 10+
+**Infrastructure:** Proxmox VMs (KVM)
+**Topology:** Layer 3 BGP ECMP (Active/Active)
+**Network:** IPv4 only
+
+---
+
+## 1. High-Level Architecture
+
+**Herr Ober** is a "Shared Nothing" cluster architecture. Each node operates independently with no central management. If a node fails, the upstream router automatically redistributes traffic to the remaining healthy nodes via ECMP.
+
+```text
+       [ Upstream Router (ECMP + BFD) ]
+              |        |        |
+      +-------+        |        +-------+
+      |                |                |
+[ Herr Ober 01 ] [ Herr Ober 02 ] [ Herr Ober 03 ]
+      |                |                |
+      +-------+--------+--------+-------+
+              | (Internal Network)
+      [ Ceph Object Store (S3 Backend) ]
+```
+
+### The Component Stack (Per Node)
+
+1. **`ober-http` (HAProxy 3.3 with AWS-LC):** SSL offloading, S3 headers, ACLs, proxies to Ceph RGW backends.
+2. **`ober-bgp` (ExaBGP):** Announces VIP(s) to the router via BGP. Supports multiple VIPs. BFD enabled by default.
+3. **`ober` CLI (Python 3.12+):** Controller for installation, configuration, and management. Distributed via PyPI.
+4. **Proxmox Watchdog:** `i6300esb` hardware watchdog to hard-reset frozen VMs.
+
+---
+
+## 2. Infrastructure Layer (Proxmox Host)
+
+To achieve 50GB/s and true HA, the VM hardware definition is critical.
+
+### VM Hardware Configuration
+
+* **CPU:** Type = **`host`** (Pass-through AES-NI instructions for SSL).
+* **Memory:** Static allocation (Disable Ballooning to prevent latency spikes).
+* **Network:** Device = **`VirtIO`** (virtio-net).
+  * **Multiqueue:** Set to match vCPU count (e.g., 8 Queues for 8 vCPUs).
+* **Watchdog:**
+  * **Model:** `Intel 6300ESB`
+  * **Action:** `Reset` (Hard reboot if guest OS freezes).
+
+---
+
+## 3. OS Layer
+
+### A. Kernel Tuning (Applied by `ober bootstrap`)
+
+Standard Linux TCP stacks choke at 50GB/s. The `ober bootstrap` command automatically writes these settings to `/etc/sysctl.d/99-herr-ober.conf`.
+
+```ini
+# Maximize Network Backlogs (Prevent drops during micro-bursts)
+net.core.netdev_max_backlog = 250000
+net.core.somaxconn = 65535
+
+# Huge TCP Buffers (128MB per socket)
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 134217728
+net.ipv4.tcp_wmem = 4096 65536 134217728
+
+# Congestion Control (BBR)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
+# Local Port Range
+net.ipv4.ip_local_port_range = 1024 65535
+
+# Panic on OOM (Trigger Watchdog faster)
+vm.panic_on_oom = 1
+kernel.panic = 10
+```
+
+### B. The "Nuclear" Watchdog Configuration
+
+Configures Systemd to kick the virtual Proxmox hardware card.
+**File:** `/etc/systemd/system.conf`
+
+```ini
+[Manager]
+# Kick hardware every 5s. If OS freezes for 10s, Proxmox resets VM.
+RuntimeWatchdogSec=10s
+ShutdownWatchdogSec=2min
+```
+
+### C. The Dummy VIP Interface
+
+Configuration to hold the Virtual IP(s) without ARP conflicts.
+
+**Ubuntu/Debian (netplan):** `/etc/netplan/60-vip.yaml`
+
+```yaml
+network:
+  version: 2
+  tunnels:
+    lo-vip:
+      mode: dummy
+      addresses:
+        - 10.0.0.100/32  # Primary VIP
+        # Additional VIPs can be added here
+```
+
+**RHEL (NetworkManager):** Configured via `nmcli` by `ober bootstrap`.
+
+### D. SELinux (RHEL only)
+
+SELinux should be disabled. `ober bootstrap` will disable it if found enabled.
+
+---
+
+## 4. Software Layer: The "Ober" Stack
+
+### Installation
+
+```bash
+# Install via pipx (recommended)
+pipx install ober
+
+# Or via pip
+pip install ober
+
+# Or via uv
+uv pip install ober
+```
+
+### Component 1: The Controller (`ober`)
+
+**Role:** Single CLI for all operations.
+
+**Commands:**
+- `ober bootstrap [path]` - Automated installation (detects OS, installs HAProxy/ExaBGP, applies tuning)
+- `ober config [--dry-run]` - Interactive configuration wizard (grouped sections, idempotent, auto-detects local IP)
+- `ober sync` - Update external system whitelists:
+  - `--routers <hostlist>` - Switches/routers
+  - `--frontend-http <hostlist>` - Frontend systems (Weka) allowed HTTP
+  - `--backend-http <hostlist>` - Backend systems (S3/Ceph)
+  - No options: prompts for all; one option: updates only that category
+- `ober status` - Show current state (supports `--json`)
+- `ober start/stop/restart` - Service management (stop performs graceful shutdown with BGP withdraw)
+- `ober health <vip>` - Long-running health check process (spawned by ExaBGP, text encoder)
+- `ober logs [-f] [-n N] [--service http|bgp]` - View journald logs
+- `ober doctor` - Diagnostic checks (works before/after bootstrap)
+- `ober test` - Test BGP connectivity and config validity without starting services
+- `ober upgrade` - Check and install HAProxy/ExaBGP updates
+- `ober uninstall` - Clean removal
+
+### Component 2: The Engine (`ober-http`)
+
+**Role:** HAProxy 3.3 with AWS-LC for enterprise-class SSL performance.
+**Service File:** `/etc/systemd/system/ober-http.service`
+
+```ini
+[Unit]
+Description=Herr Ober HTTP (HAProxy 3.3 AWS-LC)
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/haproxy -W -f /opt/ober/etc/haproxy/haproxy.cfg -p /run/ober-http.pid
+ExecReload=/bin/kill -USR2 $MAINPID
+Restart=always
+Type=notify
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Config generated by `ober config`:** `/opt/ober/etc/haproxy/haproxy.cfg`
+
+Key features:
+- Stats endpoint on port 8404 (all interfaces, for Prometheus)
+- Health endpoint at `/health` (returns 200 OK)
+- Graceful reload for config changes (zero-downtime)
+- Backend health checks: HTTP to Ceph RGW
+- Load balancing: least-connections
+- Timeouts: aggressive defaults for high-performance networks
+- Auto-reloads when certificates change on disk
+
+### Component 3: The Announcer (`ober-bgp`)
+
+**Role:** ExaBGP with BFD support (enabled by default).
+**Service File:** `/etc/systemd/system/ober-bgp.service`
+
+```ini
+[Unit]
+Description=Herr Ober BGP (ExaBGP)
+After=network.target ober-http.service
+# SAFETY LINK: If HAProxy dies, kill BGP immediately
+BindsTo=ober-http.service
+
+[Service]
+ExecStart=/opt/ober/venv/bin/exabgp /opt/ober/etc/bgp/config.ini
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Config generated by `ober config`:** `/opt/ober/etc/bgp/config.ini`
+
+---
+
+## 5. Configuration
+
+### Main Config: `<install-path>/etc/ober.yaml`
+
+Generated by `ober config` interactive wizard. Sections:
+1. BGP Settings
+   - local-as (default: 65001), peer-as (default: 65000)
+   - neighbor(s) - supports multiple BGP neighbors for redundant routers
+   - router-id, local-address (auto-detected)
+   - hold-time (default: 3 seconds for fast failover)
+   - BFD (default: enabled)
+2. VIP Settings (supports multiple VIPs)
+3. Backend Settings (supports multiple backend groups - different Ceph clusters per VIP)
+4. Certificate Settings
+5. Logging Settings (retention time)
+
+### Secrets: `~/.ober/login`
+
+BGP passwords and other sensitive data. Permissions: 600.
+
+---
+
+## 6. Failure Scenarios & Recovery Logic
+
+| Event | Mechanism | Recovery Time |
+| :--- | :--- | :--- |
+| **HAProxy Process Crash** | `ober-http` stops. Systemd `BindsTo` stops `ober-bgp`. TCP Reset sent to Router. | **Instant (< 10ms)** |
+| **HAProxy Stall/Freeze** | `ober health` gets timeout on `/health`. Sends `withdraw route`. | **~1-2 Seconds** |
+| **ExaBGP Process Crash** | OS closes TCP Port 179. Router detects BGP Session Drop. | **Instant (< 10ms)** |
+| **OS/Kernel Freeze** | Proxmox `i6300esb` Watchdog sees no kick for 10s. Hypervisor Hard-Resets VM. | **3s (BGP Hold) / 10s (Reboot)** |
+| **Network Cable Cut** | BFD packets stop. Router tears down route. | **~150ms** |
+
+---
+
+## 7. Deployment Checklist
+
+1. **Proxmox:** Add `Intel 6300ESB` Watchdog device to VM.
+2. **Network:** Verify `virtio` Multiqueue is active.
+3. **Install:** `pipx install ober`
+4. **Bootstrap:** `sudo ober bootstrap` (installs HAProxy, ExaBGP, applies tuning)
+5. **Configure:** `sudo ober config` (interactive wizard)
+6. **Verify:** `ober doctor` and `ober status`
+7. **Router:** Configure ECMP and BGP Neighbors (enable BFD).
