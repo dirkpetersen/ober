@@ -323,6 +323,7 @@ def _ensure_boto3_installed() -> bool:
     # Check if boto3 is already available
     try:
         import boto3  # type: ignore[import-untyped] # noqa: F401
+
         console.print("[green]boto3 already installed[/green]")
         return True
     except ImportError:
@@ -343,6 +344,7 @@ def _ensure_boto3_installed() -> bool:
             # Verify installation by importing
             try:
                 import boto3 as _boto3  # type: ignore[import-untyped] # noqa: F401
+
                 console.print("[green]boto3 import verified[/green]")
                 return True
             except ImportError as e:
@@ -350,7 +352,9 @@ def _ensure_boto3_installed() -> bool:
                 return False
         else:
             console.print("[red]Failed to install boto3[/red]")
-            console.print(f"[yellow]Command:[/yellow] {sys.executable} -m pip install --upgrade boto3")
+            console.print(
+                f"[yellow]Command:[/yellow] {sys.executable} -m pip install --upgrade boto3"
+            )
             if result.stdout:
                 console.print("[yellow]stdout:[/yellow]")
                 console.print(result.stdout)
@@ -405,12 +409,12 @@ def _configure_route53_acme(current: CertConfig) -> CertConfig:
     # Now select/enter zone and domain
     if hosted_zones:
         # Build choices from hosted zones
-        zone_choices = [(f"{z['Name']} ({z['Id']})", z['Id']) for z in hosted_zones]
+        zone_choices = [(f"{z['Name']} ({z['Id']})", z["Id"]) for z in hosted_zones]
 
         if len(hosted_zones) == 1:
             # Only one zone, use it directly
-            hosted_zone_id = hosted_zones[0]['Id']
-            zone_name = hosted_zones[0]['Name'].rstrip('.')
+            hosted_zone_id = hosted_zones[0]["Id"]
+            zone_name = hosted_zones[0]["Name"].rstrip(".")
             console.print(f"Using hosted zone: {zone_name} ({hosted_zone_id})")
         else:
             # Multiple zones, prompt user to select
@@ -422,8 +426,8 @@ def _configure_route53_acme(current: CertConfig) -> CertConfig:
             hosted_zone_id = selected
 
         # Get the domain name from selected zone
-        selected_zone = next((z for z in hosted_zones if z['Id'] == hosted_zone_id), None)
-        zone_name = selected_zone['Name'].rstrip('.') if selected_zone else ""
+        selected_zone = next((z for z in hosted_zones if z["Id"] == hosted_zone_id), None)
+        zone_name = selected_zone["Name"].rstrip(".") if selected_zone else ""
 
         domain = inquirer.text(
             message="Domain name for certificate",
@@ -469,15 +473,18 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
         )
         if result.returncode == 0:
             import json
+
             data = json.loads(result.stdout)
             zones = []
             for zone in data.get("HostedZones", []):
                 # Extract just the zone ID (remove /hostedzone/ prefix)
                 zone_id = zone["Id"].replace("/hostedzone/", "")
-                zones.append({
-                    "Id": zone_id,
-                    "Name": zone["Name"],
-                })
+                zones.append(
+                    {
+                        "Id": zone_id,
+                        "Name": zone["Name"],
+                    }
+                )
             console.print(f"[green]Found {len(zones)} hosted zone(s) via AWS CLI[/green]")
             return zones
         else:
@@ -493,16 +500,19 @@ def _list_route53_hosted_zones(profile: str) -> list[dict[str, str]]:
     console.print("[yellow]Trying boto3...[/yellow]")
     try:
         import boto3  # type: ignore[import-untyped]
+
         session = boto3.Session(profile_name=profile)
         client = session.client("route53")
         response = client.list_hosted_zones()
         zones = []
         for zone in response.get("HostedZones", []):
             zone_id = zone["Id"].replace("/hostedzone/", "")
-            zones.append({
-                "Id": zone_id,
-                "Name": zone["Name"],
-            })
+            zones.append(
+                {
+                    "Id": zone_id,
+                    "Name": zone["Name"],
+                }
+            )
         console.print(f"[green]Found {len(zones)} hosted zone(s) via boto3[/green]")
         return zones
     except Exception as e:
@@ -519,6 +529,7 @@ def _list_route53_hosted_zones_with_creds(
     """List Route53 hosted zones using explicit AWS credentials."""
     try:
         import boto3  # type: ignore[import-untyped]
+
         session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
@@ -529,10 +540,12 @@ def _list_route53_hosted_zones_with_creds(
         zones = []
         for zone in response.get("HostedZones", []):
             zone_id = zone["Id"].replace("/hostedzone/", "")
-            zones.append({
-                "Id": zone_id,
-                "Name": zone["Name"],
-            })
+            zones.append(
+                {
+                    "Id": zone_id,
+                    "Name": zone["Name"],
+                }
+            )
         console.print(f"[green]Found {len(zones)} hosted zone(s) with manual credentials[/green]")
         return zones
     except Exception as e:
