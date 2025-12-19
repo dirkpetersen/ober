@@ -136,10 +136,10 @@ def bootstrap(ctx: click.Context, path: str | None) -> None:
         _install_haproxy(system)
         progress.update(task, completed=True, description="[green]Installed HAProxy[/green]")
 
-        # Step 4: Create Python venv and install ExaBGP
-        task = progress.add_task("Setting up Python venv...", total=None)
+        # Step 4: Create Python venv for ExaBGP and install it
+        task = progress.add_task("Setting up ExaBGP venv...", total=None)
         _setup_venv(config.venv_path)
-        progress.update(task, completed=True, description="[green]Setup Python venv[/green]")
+        progress.update(task, completed=True, description="[green]Setup ExaBGP venv[/green]")
 
         task = progress.add_task("Installing ExaBGP...", total=None)
         _install_exabgp(config.venv_path)
@@ -194,10 +194,10 @@ def _apply_kernel_tuning() -> None:
 def _install_haproxy(system: SystemInfo) -> None:
     """Install HAProxy using the appropriate package manager."""
     if system.os_family == OSFamily.DEBIAN:
-        # Add HAProxy PPA for latest version on Ubuntu
+        # Add HAProxy PPA for latest version (3.3+ with AWS-LC) on Ubuntu
         if "ubuntu" in system.os_name.lower():
             run_command(
-                ["add-apt-repository", "-y", "ppa:vbernat/haproxy-3.0"],
+                ["add-apt-repository", "-y", "ppa:vbernat/haproxy-3.3"],
                 check=False,
             )
         run_command(["apt-get", "update"], check=False)
