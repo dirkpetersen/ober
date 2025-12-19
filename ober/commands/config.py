@@ -303,9 +303,47 @@ def _configure_certs(current: CertConfig) -> CertConfig:
         return CertConfig(path=cert_path)
 
     elif answers["cert_method"] == "route53":
+        # Ensure boto3 is installed
+        if not _ensure_boto3_installed():
+            console.print("[red]Error:[/red] Could not install boto3. Please install manually:")
+            console.print("  pip install boto3")
+            return CertConfig()
         return _configure_route53_acme(current)
 
     return CertConfig()
+
+
+def _ensure_boto3_installed() -> bool:
+    """Ensure boto3 is installed, install if needed."""
+    try:
+        import boto3  # type: ignore[import-untyped] # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    # Try to install boto3
+    console.print("[yellow]Installing boto3...[/yellow]")
+    try:
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "boto3"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            console.print("[green]boto3 installed successfully[/green]")
+            return True
+        else:
+            console.print("[red]Failed to install boto3[/red]")
+            if result.stderr:
+                console.print(result.stderr)
+            return False
+    except Exception as e:
+        console.print(f"[red]Error installing boto3: {e}[/red]")
+        return False
 
 
 def _configure_route53_acme(current: CertConfig) -> CertConfig:
