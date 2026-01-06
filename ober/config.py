@@ -58,7 +58,6 @@ class CertConfig:
 class KeepalivedConfig:
     """Keepalived/VRRP configuration."""
 
-    enabled: bool = False
     peers: list[str] = field(default_factory=list)  # Other node IPs/hostnames
     interface: str = ""  # Network interface for VIP (auto-detected if empty)
     use_multicast: bool = False  # Default: unicast
@@ -177,7 +176,6 @@ class OberConfig:
         if "keepalived" in data:
             ka_data = data["keepalived"]
             self.keepalived = KeepalivedConfig(
-                enabled=ka_data.get("enabled", False),
                 peers=ka_data.get("peers", []),
                 interface=ka_data.get("interface", ""),
                 use_multicast=ka_data.get("use_multicast", False),
@@ -247,7 +245,6 @@ class OberConfig:
                 "bfd_enabled": self.bgp.bfd_enabled,
             },
             "keepalived": {
-                "enabled": self.keepalived.enabled,
                 "peers": self.keepalived.peers,
                 "interface": self.keepalived.interface,
                 "use_multicast": self.keepalived.use_multicast,

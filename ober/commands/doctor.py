@@ -78,6 +78,9 @@ def doctor(ctx: click.Context) -> None:
     bgp_service_check = _check_service("ober-bgp")
     checks.append(bgp_service_check)
 
+    ha_service_check = _check_service("ober-ha")
+    checks.append(ha_service_check)
+
     # Check 8: Network tools
     network_check = _check_network_tools()
     checks.append(network_check)

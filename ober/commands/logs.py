@@ -25,7 +25,7 @@ console = Console()
 )
 @click.option(
     "--service",
-    type=click.Choice(["http", "bgp", "all"]),
+    type=click.Choice(["http", "bgp", "ha", "all"]),
     default="all",
     help="Service to show logs for.",
 )
@@ -44,8 +44,10 @@ def logs(ctx: click.Context, follow: bool, lines: int, service: str) -> None:
         cmd.extend(["-u", "ober-http"])
     elif service == "bgp":
         cmd.extend(["-u", "ober-bgp"])
+    elif service == "ha":
+        cmd.extend(["-u", "ober-ha"])
     else:
-        cmd.extend(["-u", "ober-http", "-u", "ober-bgp"])
+        cmd.extend(["-u", "ober-http", "-u", "ober-bgp", "-u", "ober-ha"])
 
     # Add options
     if follow:

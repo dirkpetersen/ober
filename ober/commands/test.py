@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ober test command - test BGP connectivity and config validity."""
+"""Ober test command - test connectivity and config validity."""
 
 import json
 import socket
@@ -19,10 +19,11 @@ console = Console()
 @click.command()
 @click.pass_context
 def test(ctx: click.Context) -> None:
-    """Test BGP connectivity and configuration validity.
+    """Test connectivity and configuration validity.
 
     Validates configuration and tests connectivity to BGP neighbors
-    without starting services. Useful for verifying setup before going live.
+    or keepalived peers without starting services.
+    Useful for verifying setup before going live.
     """
     parent_ctx = ctx.obj
     json_output = parent_ctx.json_output if parent_ctx else False
@@ -39,7 +40,7 @@ def test(ctx: click.Context) -> None:
     if not config.config_path.exists():
         results["config_valid"] = False
         results["errors"].append("Configuration file not found. Run 'ober config' first.")
-        _output_results(results, json_output)
+        _output_results(results, json_output, config.ha_mode)
         ctx.exit(1)
 
     # Test 2: Validate HAProxy config syntax
@@ -49,22 +50,44 @@ def test(ctx: click.Context) -> None:
         results["config_valid"] = False
         results["errors"].append(haproxy_test["message"])
 
-    # Test 3: Check BGP neighbors configured
-    if not config.bgp.neighbors:
-        results["warnings"].append("No BGP neighbors configured")
+    # Test 3: HA mode specific tests
+    if config.ha_mode == "bgp":
+        # BGP mode: Check BGP neighbors configured
+        if not config.bgp.neighbors:
+            results["warnings"].append("No BGP neighbors configured")
+        else:
+            # Test connectivity to each BGP neighbor
+            for neighbor in config.bgp.neighbors:
+                neighbor_test = _test_bgp_neighbor(neighbor)
+                results["tests"].append(neighbor_test)
+                if not neighbor_test["passed"]:
+                    results["warnings"].append(
+                        f"BGP neighbor {neighbor}: {neighbor_test['message']}"
+                    )
     else:
-        # Test 4: Test connectivity to each BGP neighbor
-        for neighbor in config.bgp.neighbors:
-            neighbor_test = _test_bgp_neighbor(neighbor)
-            results["tests"].append(neighbor_test)
-            if not neighbor_test["passed"]:
-                results["warnings"].append(f"BGP neighbor {neighbor}: {neighbor_test['message']}")
+        # Keepalived mode: Validate keepalived config and test peer connectivity
+        keepalived_test = _test_keepalived_config(config)
+        results["tests"].append(keepalived_test)
+        if not keepalived_test["passed"]:
+            results["config_valid"] = False
+            results["errors"].append(keepalived_test["message"])
 
-    # Test 5: Check VIPs configured
+        # Check peers configured
+        if not config.keepalived.peers:
+            results["warnings"].append("No keepalived peers configured (single node mode)")
+        else:
+            # Test connectivity to each peer
+            for peer in config.keepalived.peers:
+                peer_test = _test_keepalived_peer(peer)
+                results["tests"].append(peer_test)
+                if not peer_test["passed"]:
+                    results["warnings"].append(f"Keepalived peer {peer}: {peer_test['message']}")
+
+    # Test 4: Check VIPs configured
     if not config.vips:
         results["warnings"].append("No VIPs configured")
 
-    # Test 6: Check backends configured
+    # Test 5: Check backends configured
     if not config.backends:
         results["warnings"].append("No backends configured")
     else:
@@ -78,14 +101,14 @@ def test(ctx: click.Context) -> None:
                         f"Backend {backend.name}/{server}: {backend_test['message']}"
                     )
 
-    # Test 7: Check certificate if configured
+    # Test 6: Check certificate if configured
     if config.certs.path:
         cert_test = _test_certificate(config.certs.path)
         results["tests"].append(cert_test)
         if not cert_test["passed"]:
             results["warnings"].append(f"Certificate: {cert_test['message']}")
 
-    _output_results(results, json_output)
+    _output_results(results, json_output, config.ha_mode)
 
     # Exit with appropriate code
     if not results["config_valid"]:
@@ -175,6 +198,95 @@ def _test_bgp_neighbor(neighbor: str) -> dict[str, Any]:
     except Exception as e:
         return {
             "name": f"BGP Neighbor {neighbor}",
+            "passed": False,
+            "message": str(e),
+        }
+
+
+def _test_keepalived_config(config: OberConfig) -> dict[str, Any]:
+    """Test keepalived configuration syntax."""
+    if not config.keepalived_config_path.exists():
+        return {
+            "name": "Keepalived Config",
+            "passed": False,
+            "message": "Configuration file not found",
+        }
+
+    if not check_command_exists("keepalived"):
+        return {
+            "name": "Keepalived Config",
+            "passed": False,
+            "message": "Keepalived not installed",
+        }
+
+    try:
+        # keepalived -t tests config syntax without starting
+        result = subprocess.run(
+            ["keepalived", "-t", "-f", str(config.keepalived_config_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        # keepalived -t outputs to stderr and returns 0 on success
+        if result.returncode == 0:
+            return {
+                "name": "Keepalived Config",
+                "passed": True,
+                "message": "Configuration valid",
+            }
+        else:
+            # Extract error message
+            error = result.stderr.strip() or result.stdout.strip()
+            return {
+                "name": "Keepalived Config",
+                "passed": False,
+                "message": f"Invalid configuration: {error[:100]}",
+            }
+    except subprocess.TimeoutExpired:
+        return {
+            "name": "Keepalived Config",
+            "passed": False,
+            "message": "Validation timed out",
+        }
+
+
+def _test_keepalived_peer(peer: str) -> dict[str, Any]:
+    """Test connectivity to a keepalived peer via ICMP ping."""
+    try:
+        # Use ping to test basic connectivity
+        result = subprocess.run(
+            ["ping", "-c", "1", "-W", "3", peer],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return {
+                "name": f"Keepalived Peer {peer}",
+                "passed": True,
+                "message": "Reachable (ping)",
+            }
+        else:
+            return {
+                "name": f"Keepalived Peer {peer}",
+                "passed": False,
+                "message": "Not reachable (ping failed). Check network connectivity.",
+            }
+    except subprocess.TimeoutExpired:
+        return {
+            "name": f"Keepalived Peer {peer}",
+            "passed": False,
+            "message": "Ping timed out. Check network connectivity.",
+        }
+    except FileNotFoundError:
+        return {
+            "name": f"Keepalived Peer {peer}",
+            "passed": False,
+            "message": "ping command not found",
+        }
+    except Exception as e:
+        return {
+            "name": f"Keepalived Peer {peer}",
             "passed": False,
             "message": str(e),
         }
@@ -279,14 +391,15 @@ def _test_certificate(cert_path: str) -> dict[str, Any]:
         }
 
 
-def _output_results(results: dict[str, Any], json_output: bool) -> None:
+def _output_results(results: dict[str, Any], json_output: bool, ha_mode: str = "bgp") -> None:
     """Output test results."""
     if json_output:
         click.echo(json.dumps(results, indent=2))
         return
 
     console.print()
-    console.print("[bold]Ober Configuration Test[/bold]")
+    mode_label = "BGP" if ha_mode == "bgp" else "Keepalived"
+    console.print(f"[bold]Ober Configuration Test ({mode_label} mode)[/bold]")
     console.print()
 
     # Tests table

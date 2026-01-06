@@ -84,6 +84,12 @@ def status(ctx: click.Context) -> None:
     else:
         result["bgp"]["announced_routes"] = []
 
+    # Get VRRP state (if in keepalived mode and service is running)
+    if config.ha_mode == "keepalived" and ka_service.is_active:
+        result["keepalived"]["vrrp_state"] = _get_vrrp_state()
+    else:
+        result["keepalived"]["vrrp_state"] = {}
+
     # Config info
     result["config"]["exists"] = config.config_path.exists()
     result["config"]["path"] = str(config.config_path)
@@ -109,6 +115,43 @@ def _get_announced_routes() -> list[str]:
     # This would parse ExaBGP state, for now return empty
     # In production, we'd query ExaBGP's API or parse its state
     return []
+
+
+def _get_vrrp_state() -> dict[str, str]:
+    """Get VRRP state for each instance from journalctl.
+
+    Returns:
+        Dict mapping instance name (e.g., "VI_1") to state ("MASTER" or "BACKUP")
+    """
+    import re
+    import subprocess
+
+    states: dict[str, str] = {}
+
+    try:
+        # Get recent keepalived logs
+        result = subprocess.run(
+            ["journalctl", "-u", "ober-ha", "-n", "100", "--no-pager", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            # Parse for state transitions - find the most recent state for each instance
+            # Pattern: "VI_1 Entering MASTER STATE" or "VI_1 Entering BACKUP STATE"
+            pattern = re.compile(
+                r"(VI_\d+)\s+(?:Entering|entering)\s+(MASTER|BACKUP)\s+STATE", re.I
+            )
+            for line in result.stdout.split("\n"):
+                match = pattern.search(line)
+                if match:
+                    instance = match.group(1)
+                    state = match.group(2).upper()
+                    states[instance] = state
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return states
 
 
 def _get_haproxy_stats(port: int) -> dict[str, Any]:
@@ -158,9 +201,16 @@ def _print_status(
 
     # Component versions
     haproxy_ver = result["haproxy"].get("version", "not installed")
-    exabgp_ver = result["bgp"].get("version", "not installed")
     console.print(f"[bold]HAProxy:[/bold] {haproxy_ver}")
-    console.print(f"[bold]ExaBGP:[/bold] {exabgp_ver}")
+
+    # Show HA component version based on mode
+    if ha_name == "ober-bgp":
+        exabgp_ver = result["bgp"].get("version", "not installed")
+        console.print(f"[bold]ExaBGP:[/bold] {exabgp_ver}")
+    else:
+        keepalived_ver = result["keepalived"].get("version", "not installed")
+        console.print(f"[bold]Keepalived:[/bold] {keepalived_ver}")
+
     console.print()
 
     # Configuration
@@ -181,6 +231,18 @@ def _print_status(
         console.print(f"[bold]Announced Routes:[/bold] {', '.join(routes)}")
     elif ha_name == "ober-bgp" and ha_service.is_active:
         console.print("[bold]Announced Routes:[/bold] [dim]none[/dim]")
+
+    # VRRP state (only shown in keepalived mode)
+    vrrp_state = result["keepalived"].get("vrrp_state", {})
+    if vrrp_state:
+        console.print()
+        console.print("[bold]VRRP State:[/bold]")
+        for instance, state in sorted(vrrp_state.items()):
+            state_color = "green" if state == "MASTER" else "yellow"
+            console.print(f"  {instance}: [{state_color}]{state}[/{state_color}]")
+    elif ha_name == "ober-ha" and ha_service.is_active:
+        console.print()
+        console.print("[bold]VRRP State:[/bold] [dim]unknown (check logs)[/dim]")
 
     # Show systemd status output for verbose mode
     console.print()

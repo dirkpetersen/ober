@@ -456,6 +456,12 @@ def _open_firewall_ports(system: SystemInfo) -> None:
             # Open ports
             run_command(["ufw", "allow", "80/tcp"], check=False)
             run_command(["ufw", "allow", "443/tcp"], check=False)
+            # Allow VRRP protocol (IP protocol 112) for keepalived
+            # ufw doesn't support raw IP protocols, so use iptables for VRRP
+            run_command(
+                ["iptables", "-A", "INPUT", "-p", "112", "-j", "ACCEPT"],
+                check=False,
+            )
         else:
             # Fall back to iptables if ufw is not available
             run_command(
@@ -466,13 +472,13 @@ def _open_firewall_ports(system: SystemInfo) -> None:
                 ["iptables", "-A", "INPUT", "-p", "tcp", "--dport", "443", "-j", "ACCEPT"],
                 check=False,
             )
+            # Allow VRRP protocol (IP protocol 112) for keepalived
+            run_command(
+                ["iptables", "-A", "INPUT", "-p", "112", "-j", "ACCEPT"],
+                check=False,
+            )
             # Save iptables rules
             run_command(["iptables-save"], check=False)
-        # Allow VRRP protocol (IP protocol 112) for keepalived
-        run_command(
-            ["iptables", "-A", "INPUT", "-p", "vrrp", "-j", "ACCEPT"],
-            check=False,
-        )
     elif system.os_family == OSFamily.RHEL:
         # RHEL 10+ uses firewalld
         # Check if firewalld is available
@@ -503,6 +509,11 @@ def _open_firewall_ports(system: SystemInfo) -> None:
             )
             run_command(
                 ["iptables", "-A", "INPUT", "-p", "tcp", "--dport", "443", "-j", "ACCEPT"],
+                check=False,
+            )
+            # Allow VRRP protocol (IP protocol 112) for keepalived
+            run_command(
+                ["iptables", "-A", "INPUT", "-p", "112", "-j", "ACCEPT"],
                 check=False,
             )
             # Save iptables rules (for RHEL)

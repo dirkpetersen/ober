@@ -71,6 +71,29 @@ ober doctor
 ober status
 ```
 
+### Example: Keepalived Mode Setup
+
+For a 3-node keepalived cluster without BGP:
+
+**Node 1:**
+```bash
+sudo ober bootstrap
+sudo ober config
+# Select: Keepalived/VRRP mode
+# Peers: node2,node3 (or 10.0.0.2,10.0.0.3)
+# VIPs: 192.168.1.100,192.168.1.101,192.168.1.102 (one per node)
+sudo ober start
+```
+
+**Node 2 & 3:** Repeat the same steps with appropriate peer IPs.
+
+**DNS Round-Robin:**
+```
+s3.example.com  IN  A  192.168.1.100
+s3.example.com  IN  A  192.168.1.101
+s3.example.com  IN  A  192.168.1.102
+```
+
 ---
 
 ## Usage
@@ -79,11 +102,11 @@ ober status
 
 ```bash
 ober bootstrap [path]     # Install and set up everything
-ober config [--dry-run]   # Interactive configuration wizard
+ober config [--dry-run]   # Interactive configuration wizard (choose BGP or Keepalived mode)
 ober sync                 # Update external system whitelists
 ober status               # Show current state (--json for scripting)
-ober start|stop|restart   # Service management (stop gracefully withdraws BGP)
-ober logs [-f] [-n N]     # View logs (--service http|bgp to filter)
+ober start|stop|restart   # Service management (stop gracefully withdraws routes/releases VIPs)
+ober logs [-f] [-n N]     # View logs (--service http|bgp|ha|all to filter)
 ober doctor               # Diagnostic checks
 ober test                 # Test BGP connectivity without starting services
 ober upgrade              # Check and install updates
@@ -121,12 +144,22 @@ curl http://127.0.0.1:8404/health
 
 ## Failure & Recovery
 
+### BGP/ECMP Mode
 | Event | Recovery |
 |-------|----------|
 | **Node Crash** | Traffic fails over via ECMP (instant) |
 | **OS Freeze** | Proxmox Watchdog hard-resets VM (10s) |
 | **HAProxy Crash** | BGP withdraws immediately (`BindsTo=`) |
 | **Network Cut** | BFD detects and tears down route (~150ms) |
+
+### Keepalived Mode
+| Event | Recovery |
+|-------|----------|
+| **Node Crash** | VIP fails over to backup node (instant) |
+| **OS Freeze** | Proxmox Watchdog resets VM, VRRP timeout triggers failover (3-10s) |
+| **HAProxy Crash** | Health check fails, priority drops, VIP fails over (4-6s) |
+| **Keepalived Crash** | VRRP advertisements stop, VIP fails over (3s) |
+| **Network Partition** | Risk of split-brain (both nodes may claim VIP) |
 
 See [architecture.md](https://github.com/dirkpetersen/herr-ober/blob/main/architecture.md) for detailed failure scenarios.
 

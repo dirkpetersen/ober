@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Ober config command - interactive configuration wizard."""
 
+import hashlib
 import os
 import socket
 from pathlib import Path
@@ -58,7 +59,8 @@ def get_vip_owner(vip: str, nodes: list[str], local_hostname: str) -> tuple[str,
         Tuple of (owner_hostname, priority) where priority is 100 if owner, 90 otherwise
     """
     sorted_nodes = sorted(nodes)
-    vip_hash = hash(vip) % len(sorted_nodes)
+    # Use deterministic hash (md5) to ensure consistent results across nodes
+    vip_hash = int(hashlib.md5(vip.encode()).hexdigest(), 16) % len(sorted_nodes)
     owner = sorted_nodes[vip_hash]
 
     is_owner = owner == local_hostname
@@ -76,7 +78,8 @@ def get_vrrp_router_id(vip: str) -> int:
     Returns:
         Router ID between 1 and 255
     """
-    return (hash(vip) % 255) + 1
+    # Use deterministic hash (md5) to ensure consistent results across nodes
+    return (int(hashlib.md5(vip.encode()).hexdigest(), 16) % 255) + 1
 
 
 def _parse_hostlist(hostlist: str) -> list[str]:
@@ -116,12 +119,13 @@ def _detect_default_interface() -> str:
     """Detect the default network interface.
 
     Returns:
-        Interface name (e.g., "eth0", "ens3") or "eth0" as fallback
+        Interface name (e.g., "eth0", "ens3") or first available non-loopback interface
     """
     import re
 
     from ober.system import run_command
 
+    # Try to get default route interface
     try:
         result = run_command(
             ["ip", "route", "show", "default"],
@@ -134,7 +138,25 @@ def _detect_default_interface() -> str:
     except Exception:
         pass
 
-    return "eth0"  # Fallback
+    # Fallback: try to find any non-loopback interface
+    try:
+        result = run_command(
+            ["ip", "-o", "link", "show"],
+            check=False,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                match = re.search(r"^\d+:\s+(\S+):", line)
+                if match:
+                    iface = match.group(1)
+                    # Skip loopback and other virtual interfaces
+                    if not iface.startswith(("lo", "docker", "veth", "br-")):
+                        return iface
+    except Exception:
+        pass
+
+    # Final fallback
+    return "eth0"
 
 
 @click.command()
@@ -189,7 +211,9 @@ def config(ctx: click.Context, dry_run: bool) -> None:
         # Section 3: VIP Configuration
         console.print()
         console.print("[bold cyan]3. VIP Configuration[/bold cyan]")
-        vips = _configure_vips(config.vips)
+        # Pass peers for validation if in keepalived mode
+        peers = ka_config.peers if ha_mode == "keepalived" else None
+        vips = _configure_vips(config.vips, ha_mode, peers)
         config.vips = vips
 
         # Section 4: Backend Configuration
@@ -239,7 +263,12 @@ def config(ctx: click.Context, dry_run: bool) -> None:
             _print_config_files(config)
             console.print()
             console.print("Next steps:")
-            console.print("  1. Run [bold]ober test[/bold] to validate BGP connectivity")
+            if config.ha_mode == "bgp":
+                console.print("  1. Run [bold]ober test[/bold] to validate BGP connectivity")
+            else:
+                console.print(
+                    "  1. Run [bold]ober test[/bold] to validate keepalived configuration"
+                )
             console.print("  2. Run [bold]ober start[/bold] to start services")
         else:
             console.print("[yellow]Configuration not applied.[/yellow]")
@@ -312,7 +341,6 @@ def _configure_keepalived(
         )
 
     return KeepalivedConfig(
-        enabled=True,
         peers=peers,
         interface=answers["interface"],
         use_multicast=answers["use_multicast"],
@@ -386,8 +414,16 @@ def _configure_bgp(current: BGPConfig, local_ip: str) -> BGPConfig:
     )
 
 
-def _configure_vips(current: list[VIPConfig]) -> list[VIPConfig]:
-    """Configure Virtual IP settings."""
+def _configure_vips(
+    current: list[VIPConfig], ha_mode: str = "bgp", peers: list[str] | None = None
+) -> list[VIPConfig]:
+    """Configure Virtual IP settings.
+
+    Args:
+        current: Current VIP configuration
+        ha_mode: HA mode (bgp or keepalived)
+        peers: List of peer nodes (for keepalived mode validation)
+    """
     vips: list[VIPConfig] = []
 
     current_vips = ",".join(v.address for v in current) if current else ""
@@ -409,7 +445,26 @@ def _configure_vips(current: list[VIPConfig]) -> list[VIPConfig]:
             # Add /32 if not specified
             if "/" not in vip:
                 vip = f"{vip}/32"
+
+            # Validate VIP address
+            is_valid, error_msg = _validate_vip(vip)
+            if not is_valid:
+                console.print(f"[red]Error:[/red] {error_msg}")
+                continue
+
             vips.append(VIPConfig(address=vip))
+
+    # Validate VIP count for keepalived mode
+    if ha_mode == "keepalived" and peers is not None:
+        total_nodes = len(peers) + 1  # peers + self
+        if len(vips) != total_nodes and len(vips) > 0:
+            console.print(
+                f"[yellow]Warning:[/yellow] You have {len(vips)} VIP(s) but {total_nodes} nodes."
+            )
+            console.print(
+                f"[yellow]For optimal load distribution in keepalived mode, "
+                f"configure {total_nodes} VIP(s) (one per node).[/yellow]"
+            )
 
     return vips
 
@@ -826,6 +881,34 @@ def _validate_ip(ip: str) -> bool:
         return False
 
 
+def _validate_vip(vip: str) -> tuple[bool, str]:
+    """Validate a VIP address with optional CIDR notation.
+
+    Args:
+        vip: VIP address (e.g., "192.168.1.100" or "192.168.1.100/32")
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Split CIDR notation if present
+    if "/" in vip:
+        ip_part, cidr_part = vip.rsplit("/", 1)
+        try:
+            cidr = int(cidr_part)
+            if not (0 <= cidr <= 32):
+                return False, f"Invalid CIDR prefix: /{cidr_part} (must be 0-32)"
+        except ValueError:
+            return False, f"Invalid CIDR prefix: /{cidr_part}"
+    else:
+        ip_part = vip
+
+    # Validate IP address
+    if not _validate_ip(ip_part):
+        return False, f"Invalid IP address: {ip_part}"
+
+    return True, ""
+
+
 def _print_config_summary(config: OberConfig) -> None:
     """Print a summary of the configuration."""
     console.print("[bold]Configuration Summary:[/bold]")
@@ -846,12 +929,9 @@ def _print_config_summary(config: OberConfig) -> None:
         console.print(f"  BFD: {'enabled' if config.bgp.bfd_enabled else 'disabled'}")
     else:
         console.print("[cyan]Keepalived:[/cyan]")
-        console.print(f"  Enabled: {config.keepalived.enabled}")
         console.print(f"  Peers: {', '.join(config.keepalived.peers) or 'none'}")
         console.print(f"  Interface: {config.keepalived.interface or 'auto-detect'}")
-        console.print(
-            f"  Mode: {'multicast' if config.keepalived.use_multicast else 'unicast'}"
-        )
+        console.print(f"  Mode: {'multicast' if config.keepalived.use_multicast else 'unicast'}")
         console.print(f"  Advertisement Interval: {config.keepalived.advert_int}s")
 
     console.print()
@@ -1108,6 +1188,11 @@ def _generate_keepalived_config(config: OberConfig) -> None:
 
         cfg_lines.extend(
             [
+                "    # Track interface - demote priority if interface goes down",
+                "    track_interface {",
+                f"        {interface} weight -50",
+                "    }",
+                "",
                 "    # Health check - demote priority if HAProxy is down",
                 "    track_script {",
                 "        chk_haproxy",

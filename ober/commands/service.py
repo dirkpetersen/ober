@@ -63,7 +63,8 @@ def start(ctx: click.Context) -> None:
         else:
             console.print("[yellow]Skipping ober-bgp (not configured)[/yellow]")
     else:  # keepalived mode
-        if config.keepalived_config_path.exists() and config.keepalived.peers:
+        # Start keepalived if config exists (peers not required for single-node testing)
+        if config.keepalived_config_path.exists():
             try:
                 run_command(["systemctl", "enable", "ober-ha"])
                 run_command(["systemctl", "start", "ober-ha"])

@@ -1433,6 +1433,7 @@ class TestTestCommandCLI:
         ):
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
+            config_mock.ha_mode = "bgp"
             config_mock.bgp.neighbors = ["10.0.0.1"]
             config_mock.vips = [MagicMock(address="10.0.100.1")]
             backend_mock = MagicMock()
@@ -1467,6 +1468,38 @@ class TestBootstrapMoreTests:
             _apply_kernel_tuning()
             # Function should run without error
             assert True
+
+    def test_install_packages_includes_keepalived(self) -> None:
+        """Test _install_packages installs both HAProxy and Keepalived."""
+        from ober.commands.bootstrap import _install_packages
+        from ober.system import OSFamily
+
+        system = SystemInfo()
+        system.os_family = OSFamily.DEBIAN
+
+        with patch("ober.commands.bootstrap.run_command") as mock_run:
+            _install_packages(system)
+            # Check that install command includes both haproxy and keepalived
+            assert mock_run.called
+            calls = [str(call) for call in mock_run.call_args_list]
+            # Should have called apt-get install with both packages
+            assert any("haproxy" in str(call) and "keepalived" in str(call) for call in calls)
+
+    def test_install_packages_rhel_includes_keepalived(self) -> None:
+        """Test _install_packages installs both HAProxy and Keepalived on RHEL."""
+        from ober.commands.bootstrap import _install_packages
+        from ober.system import OSFamily
+
+        system = SystemInfo()
+        system.os_family = OSFamily.RHEL
+
+        with patch("ober.commands.bootstrap.run_command") as mock_run:
+            _install_packages(system)
+            # Check that install command includes both haproxy and keepalived
+            assert mock_run.called
+            calls = [str(call) for call in mock_run.call_args_list]
+            # Should have called dnf install with both packages
+            assert any("haproxy" in str(call) and "keepalived" in str(call) for call in calls)
 
 
 class TestCLIEdgeCases:
@@ -1733,6 +1766,7 @@ class TestTestCommandWarnings:
         ):
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
+            config_mock.ha_mode = "bgp"
             config_mock.bgp.neighbors = []
             config_mock.vips = []
             config_mock.backends = []
@@ -1948,6 +1982,7 @@ class TestPrintStatus:
             "services": {"ober-http": {"active": True}},
             "haproxy": {"version": "3.3.0"},
             "bgp": {"version": "4.2.21", "announced_routes": ["10.0.100.1"]},
+            "keepalived": {"version": None, "vrrp_state": {}},
             "config": {"exists": True, "path": "~/.ober/etc/ober.yaml", "vips": ["10.0.100.1"]},
         }
 
@@ -2012,6 +2047,7 @@ class TestTestCommandJSON:
         ):
             config_mock = MagicMock()
             config_mock.config_path.exists.return_value = True
+            config_mock.ha_mode = "bgp"
             config_mock.bgp.neighbors = []
             config_mock.vips = []
             config_mock.backends = []
