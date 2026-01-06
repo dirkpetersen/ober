@@ -3,12 +3,15 @@
 [![PyPI version](https://badge.fury.io/py/herr-ober.svg)](https://badge.fury.io/py/herr-ober)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/dirkpetersen/ober/actions/workflows/test.yml/badge.svg)](https://github.com/dirkpetersen/ober/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/dirkpetersen/ober/branch/main/graph/badge.svg)](https://codecov.io/gh/dirkpetersen/ober)
+[![Tests](https://github.com/dirkpetersen/herr-ober/actions/workflows/test.yml/badge.svg)](https://github.com/dirkpetersen/herr-ober/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/dirkpetersen/herr-ober/branch/main/graph/badge.svg)](https://codecov.io/gh/dirkpetersen/herr-ober)
 
-**High-Performance S3 Ingress Controller (BGP/ECMP)**
+**High-Performance S3 Ingress Controller (BGP/ECMP or VRRP)**
 
-Herr Ober ("Head Waiter") is a lightweight, high-throughput (50GB/s+) ingress controller designed for Ceph RGW clusters. It uses **HAProxy 3.3 (AWS-LC)** for SSL offloading and **ExaBGP** for Layer 3 High Availability via ECMP.
+Herr Ober ("Head Waiter") is a lightweight, high-throughput (50GB/s+) ingress controller designed for Ceph RGW clusters. It uses **HAProxy 3.3 (AWS-LC)** for SSL offloading with two HA modes:
+
+- **BGP/ECMP Mode** - Uses **ExaBGP** for Layer 3 HA via BGP (requires BGP-capable router)
+- **Keepalived Mode** - Uses **VRRP** for VIP failover (no BGP required)
 
 **Supported:** Ubuntu, Debian, RHEL 10+ on Proxmox VMs (KVM)
 
@@ -16,7 +19,7 @@ Herr Ober ("Head Waiter") is a lightweight, high-throughput (50GB/s+) ingress co
 
 ## Documentation
 
-For deep internals, kernel tuning, and failure recovery logic, see **[architecture.md](https://github.com/dirkpetersen/ober/blob/main/architecture.md)**.
+For deep internals, kernel tuning, and failure recovery logic, see **[architecture.md](https://github.com/dirkpetersen/herr-ober/blob/main/architecture.md)**.
 
 ---
 
@@ -34,7 +37,7 @@ Before installing, ensure the VM is configured for 50GB/s throughput:
 
 **One-liner (recommended):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dirkpetersen/ober/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dirkpetersen/herr-ober/main/install.sh | sudo bash
 sudo ober bootstrap
 ```
 
@@ -50,11 +53,13 @@ ober bootstrap
 
 ### 3. Configure
 
-Interactive wizard to set up BGP, VIPs, backends, and certificates.
+Interactive wizard to select HA mode (BGP or Keepalived) and configure VIPs, backends, and certificates.
 
 ```bash
 sudo ober config
 ```
+
+**Note:** Choose BGP mode if you have a BGP-capable router for ECMP load balancing. Choose Keepalived mode for VRRP-based failover without BGP.
 
 ### 4. Verify
 
@@ -123,7 +128,7 @@ curl http://127.0.0.1:8404/health
 | **HAProxy Crash** | BGP withdraws immediately (`BindsTo=`) |
 | **Network Cut** | BFD detects and tears down route (~150ms) |
 
-See [architecture.md](https://github.com/dirkpetersen/ober/blob/main/architecture.md) for detailed failure scenarios.
+See [architecture.md](https://github.com/dirkpetersen/herr-ober/blob/main/architecture.md) for detailed failure scenarios.
 
 ---
 
@@ -131,7 +136,7 @@ See [architecture.md](https://github.com/dirkpetersen/ober/blob/main/architectur
 
 ```bash
 # Clone and install dev dependencies
-git clone https://github.com/dirkpetersen/ober.git
+git clone https://github.com/dirkpetersen/herr-ober.git
 cd ober
 pip install -e ".[dev]"
 

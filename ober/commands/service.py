@@ -50,17 +50,29 @@ def start(ctx: click.Context) -> None:
     # Wait for HAProxy to be ready
     time.sleep(1)
 
-    # Enable and start ExaBGP
-    if config.bgp_config_path.exists() and config.bgp.neighbors:
-        try:
-            run_command(["systemctl", "enable", "ober-bgp"])
-            run_command(["systemctl", "start", "ober-bgp"])
-            console.print("[green]Started ober-bgp (ExaBGP)[/green]")
-        except Exception as e:
-            console.print(f"[red]Failed to start ober-bgp:[/red] {e}")
-            ctx.exit(1)
-    else:
-        console.print("[yellow]Skipping ober-bgp (not configured)[/yellow]")
+    # Enable and start BGP or Keepalived based on ha_mode
+    if config.ha_mode == "bgp":
+        if config.bgp_config_path.exists() and config.bgp.neighbors:
+            try:
+                run_command(["systemctl", "enable", "ober-bgp"])
+                run_command(["systemctl", "start", "ober-bgp"])
+                console.print("[green]Started ober-bgp (ExaBGP)[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to start ober-bgp:[/red] {e}")
+                ctx.exit(1)
+        else:
+            console.print("[yellow]Skipping ober-bgp (not configured)[/yellow]")
+    else:  # keepalived mode
+        if config.keepalived_config_path.exists() and config.keepalived.peers:
+            try:
+                run_command(["systemctl", "enable", "ober-ha"])
+                run_command(["systemctl", "start", "ober-ha"])
+                console.print("[green]Started ober-ha (Keepalived)[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to start ober-ha:[/red] {e}")
+                ctx.exit(1)
+        else:
+            console.print("[yellow]Skipping ober-ha (not configured)[/yellow]")
 
     console.print()
     console.print("[bold green]Services started![/bold green]")
@@ -91,17 +103,28 @@ def stop(ctx: click.Context, force: bool) -> None:
 
     console.print("Stopping Ober services...")
 
+    config = OberConfig.load()
+
     bgp_service = ServiceInfo.from_service_name("ober-bgp")
+    ka_service = ServiceInfo.from_service_name("ober-ha")
     http_service = ServiceInfo.from_service_name("ober-http")
 
-    if not force and bgp_service.is_active:
-        # Graceful shutdown: stop BGP first to withdraw routes
-        console.print("Withdrawing BGP routes...")
-        try:
-            run_command(["systemctl", "stop", "ober-bgp"])
-            console.print("[green]Stopped ober-bgp (routes withdrawn)[/green]")
-        except Exception as e:
-            console.print(f"[yellow]Warning:[/yellow] Failed to stop ober-bgp: {e}")
+    if not force:
+        # Graceful shutdown: stop HA service first
+        if config.ha_mode == "bgp" and bgp_service.is_active:
+            console.print("Withdrawing BGP routes...")
+            try:
+                run_command(["systemctl", "stop", "ober-bgp"])
+                console.print("[green]Stopped ober-bgp (routes withdrawn)[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning:[/yellow] Failed to stop ober-bgp: {e}")
+        elif config.ha_mode == "keepalived" and ka_service.is_active:
+            console.print("Releasing VIPs...")
+            try:
+                run_command(["systemctl", "stop", "ober-ha"])
+                console.print("[green]Stopped ober-ha (VIPs released)[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning:[/yellow] Failed to stop ober-ha: {e}")
 
         # Wait for connections to drain
         if http_service.is_active:
@@ -119,13 +142,20 @@ def stop(ctx: click.Context, force: bool) -> None:
     else:
         console.print("[dim]ober-http was not running[/dim]")
 
-    # Stop BGP if not already stopped
+    # Stop HA services if not already stopped
     if bgp_service.is_active:
         try:
             run_command(["systemctl", "stop", "ober-bgp"])
             console.print("[green]Stopped ober-bgp[/green]")
         except Exception as e:
             console.print(f"[yellow]Warning:[/yellow] Failed to stop ober-bgp: {e}")
+
+    if ka_service.is_active:
+        try:
+            run_command(["systemctl", "stop", "ober-ha"])
+            console.print("[green]Stopped ober-ha[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Failed to stop ober-ha: {e}")
 
     console.print()
     console.print("[bold green]Services stopped![/bold green]")
@@ -172,6 +202,8 @@ def restart(ctx: click.Context, reload_only: bool) -> None:
     else:
         console.print("Restarting Ober services...")
 
+        config = OberConfig.load()
+
         # Restart HAProxy
         try:
             run_command(["systemctl", "restart", "ober-http"])
@@ -183,14 +215,23 @@ def restart(ctx: click.Context, reload_only: bool) -> None:
         # Wait for HAProxy to be ready
         time.sleep(1)
 
-        # Restart ExaBGP
-        bgp_service = ServiceInfo.from_service_name("ober-bgp")
-        if bgp_service.is_enabled:
-            try:
-                run_command(["systemctl", "restart", "ober-bgp"])
-                console.print("[green]Restarted ober-bgp (ExaBGP)[/green]")
-            except Exception as e:
-                console.print(f"[yellow]Warning:[/yellow] Failed to restart ober-bgp: {e}")
+        # Restart BGP or Keepalived based on ha_mode
+        if config.ha_mode == "bgp":
+            bgp_service = ServiceInfo.from_service_name("ober-bgp")
+            if bgp_service.is_enabled:
+                try:
+                    run_command(["systemctl", "restart", "ober-bgp"])
+                    console.print("[green]Restarted ober-bgp (ExaBGP)[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning:[/yellow] Failed to restart ober-bgp: {e}")
+        else:
+            ka_service = ServiceInfo.from_service_name("ober-ha")
+            if ka_service.is_enabled:
+                try:
+                    run_command(["systemctl", "restart", "ober-ha"])
+                    console.print("[green]Restarted ober-ha (Keepalived)[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning:[/yellow] Failed to restart ober-ha: {e}")
 
     console.print()
     console.print("[bold green]Services restarted![/bold green]")

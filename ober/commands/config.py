@@ -13,6 +13,7 @@ from ober.config import (
     BackendConfig,
     BGPConfig,
     CertConfig,
+    KeepalivedConfig,
     OberConfig,
     VIPConfig,
 )
@@ -43,6 +44,97 @@ def _get_aws_credentials_path() -> Path:
 
     # Fallback to standard location
     return Path.home() / ".aws" / "credentials"
+
+
+def get_vip_owner(vip: str, nodes: list[str], local_hostname: str) -> tuple[str, int]:
+    """Determine which node owns a VIP using consistent hashing.
+
+    Args:
+        vip: VIP address
+        nodes: List of node hostnames/IPs (including self)
+        local_hostname: This node's hostname/IP
+
+    Returns:
+        Tuple of (owner_hostname, priority) where priority is 100 if owner, 90 otherwise
+    """
+    sorted_nodes = sorted(nodes)
+    vip_hash = hash(vip) % len(sorted_nodes)
+    owner = sorted_nodes[vip_hash]
+
+    is_owner = owner == local_hostname
+    priority = 100 if is_owner else 90
+
+    return owner, priority
+
+
+def get_vrrp_router_id(vip: str) -> int:
+    """Get VRRP router ID (1-255) from VIP using hash.
+
+    Args:
+        vip: VIP address (e.g., "10.0.0.100")
+
+    Returns:
+        Router ID between 1 and 255
+    """
+    return (hash(vip) % 255) + 1
+
+
+def _parse_hostlist(hostlist: str) -> list[str]:
+    """Parse comma-separated hostlist, supporting Slurm hostlist syntax.
+
+    Examples:
+        "10.0.0.[1-3]" -> ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        "node[01-03]" -> ["node01", "node02", "node03"]
+        "10.0.0.1,10.0.0.2" -> ["10.0.0.1", "10.0.0.2"]
+    """
+    import re
+
+    hosts = []
+    for item in hostlist.split(","):
+        item = item.strip()
+        if not item:
+            continue
+
+        # Check for range syntax [start-end]
+        match = re.match(r"^(.*)\[(\d+)-(\d+)\](.*)$", item)
+        if match:
+            prefix, start, end, suffix = match.groups()
+            start_num = int(start)
+            end_num = int(end)
+            width = len(start)  # Preserve zero-padding
+
+            for i in range(start_num, end_num + 1):
+                num_str = str(i).zfill(width)
+                hosts.append(f"{prefix}{num_str}{suffix}")
+        else:
+            hosts.append(item)
+
+    return hosts
+
+
+def _detect_default_interface() -> str:
+    """Detect the default network interface.
+
+    Returns:
+        Interface name (e.g., "eth0", "ens3") or "eth0" as fallback
+    """
+    import re
+
+    from ober.system import run_command
+
+    try:
+        result = run_command(
+            ["ip", "route", "show", "default"],
+            check=False,
+        )
+        if result.returncode == 0:
+            match = re.search(r"dev\s+(\S+)", result.stdout)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+
+    return "eth0"  # Fallback
 
 
 @click.command()
@@ -78,32 +170,43 @@ def config(ctx: click.Context, dry_run: bool) -> None:
     local_ip = system.get_local_ip() or ""
 
     try:
-        # Section 1: BGP Configuration
-        console.print("[bold cyan]1. BGP Configuration[/bold cyan]")
-        bgp_config = _configure_bgp(config.bgp, local_ip)
-        config.bgp = bgp_config
+        # Section 0: HA Mode Selection
+        console.print("[bold cyan]1. HA Mode Selection[/bold cyan]")
+        ha_mode = _configure_ha_mode(config.ha_mode)
+        config.ha_mode = ha_mode
 
-        # Section 2: VIP Configuration
+        # Section 1: BGP or Keepalived Configuration (conditional)
         console.print()
-        console.print("[bold cyan]2. VIP Configuration[/bold cyan]")
+        if ha_mode == "bgp":
+            console.print("[bold cyan]2. BGP Configuration[/bold cyan]")
+            bgp_config = _configure_bgp(config.bgp, local_ip)
+            config.bgp = bgp_config
+        else:
+            console.print("[bold cyan]2. Keepalived Configuration[/bold cyan]")
+            ka_config = _configure_keepalived(config.keepalived, local_ip, system.hostname)
+            config.keepalived = ka_config
+
+        # Section 3: VIP Configuration
+        console.print()
+        console.print("[bold cyan]3. VIP Configuration[/bold cyan]")
         vips = _configure_vips(config.vips)
         config.vips = vips
 
-        # Section 3: Backend Configuration
+        # Section 4: Backend Configuration
         console.print()
-        console.print("[bold cyan]3. Backend Configuration[/bold cyan]")
+        console.print("[bold cyan]4. Backend Configuration[/bold cyan]")
         backends = _configure_backends(config.backends)
         config.backends = backends
 
-        # Section 4: Certificate Configuration
+        # Section 5: Certificate Configuration
         console.print()
-        console.print("[bold cyan]4. Certificate Configuration[/bold cyan]")
+        console.print("[bold cyan]5. Certificate Configuration[/bold cyan]")
         certs = _configure_certs(config.certs)
         config.certs = certs
 
-        # Section 5: Additional Settings
+        # Section 6: Additional Settings
         console.print()
-        console.print("[bold cyan]5. Additional Settings[/bold cyan]")
+        console.print("[bold cyan]6. Additional Settings[/bold cyan]")
         config.log_retention_days, config.stats_port = _configure_additional(
             config.log_retention_days, config.stats_port
         )
@@ -140,6 +243,81 @@ def config(ctx: click.Context, dry_run: bool) -> None:
             console.print("  2. Run [bold]ober start[/bold] to start services")
         else:
             console.print("[yellow]Configuration not applied.[/yellow]")
+
+
+def _configure_ha_mode(current: str) -> str:
+    """Configure HA mode selection."""
+    questions = [
+        inquirer.List(
+            "ha_mode",
+            message="Select High Availability mode",
+            choices=[
+                ("BGP/ECMP - Use BGP for route announcement (requires BGP router)", "bgp"),
+                (
+                    "Keepalived/VRRP - Use VRRP for VIP failover (no BGP required)",
+                    "keepalived",
+                ),
+            ],
+            default=current,
+        ),
+    ]
+
+    answers = inquirer.prompt(questions)
+    if not answers:
+        raise KeyboardInterrupt
+
+    return str(answers["ha_mode"])
+
+
+def _configure_keepalived(
+    current: KeepalivedConfig, _local_ip: str, _hostname: str
+) -> KeepalivedConfig:
+    """Configure keepalived settings."""
+    questions = [
+        inquirer.Text(
+            "peers",
+            message="Peer node IPs (comma-separated, Slurm hostlist supported)",
+            default=",".join(current.peers) if current.peers else "",
+        ),
+        inquirer.Text(
+            "interface",
+            message="Network interface for VIPs (leave empty for auto-detect)",
+            default=current.interface or "",
+        ),
+        inquirer.Confirm(
+            "use_multicast",
+            message="Use multicast mode? (default: unicast)",
+            default=current.use_multicast,
+        ),
+        inquirer.Text(
+            "advert_int",
+            message="Advertisement interval (seconds)",
+            default=str(current.advert_int or 1),
+            validate=lambda _, x: x.isdigit() and int(x) >= 1,
+        ),
+    ]
+
+    answers = inquirer.prompt(questions)
+    if not answers:
+        raise KeyboardInterrupt
+
+    # Parse peers (support Slurm hostlist format)
+    peers_str = answers["peers"]
+    peers = _parse_hostlist(peers_str)
+
+    # Validate minimum peers
+    if len(peers) < 1:
+        console.print(
+            "[yellow]Warning:[/yellow] At least 2 total nodes (1 peer) recommended for HA"
+        )
+
+    return KeepalivedConfig(
+        enabled=True,
+        peers=peers,
+        interface=answers["interface"],
+        use_multicast=answers["use_multicast"],
+        advert_int=int(answers["advert_int"]),
+    )
 
 
 def _configure_bgp(current: BGPConfig, local_ip: str) -> BGPConfig:
@@ -599,12 +777,20 @@ def _print_config_files(config: OberConfig) -> None:
     console.print("[cyan]Configuration Files:[/cyan]")
     console.print(f"  Ober config:    {config.config_path}")
     console.print(f"  HAProxy config: {config.haproxy_config_path}")
-    console.print(f"  ExaBGP config:  {config.bgp_config_path}")
+
+    if config.ha_mode == "bgp":
+        console.print(f"  ExaBGP config:  {config.bgp_config_path}")
+    else:
+        console.print(f"  Keepalived config: {config.keepalived_config_path}")
 
     console.print()
     console.print("[cyan]Systemd Services:[/cyan]")
     console.print("  ober-http.service (HAProxy)")
-    console.print("  ober-bgp.service (ExaBGP)")
+
+    if config.ha_mode == "bgp":
+        console.print("  ober-bgp.service (ExaBGP)")
+    else:
+        console.print("  ober-ha.service (Keepalived)")
 
 
 def _configure_additional(log_retention: int, stats_port: int) -> tuple[int, int]:
@@ -645,14 +831,28 @@ def _print_config_summary(config: OberConfig) -> None:
     console.print("[bold]Configuration Summary:[/bold]")
     console.print()
 
-    console.print("[cyan]BGP:[/cyan]")
-    console.print(f"  Local AS: {config.bgp.local_as}")
-    console.print(f"  Peer AS: {config.bgp.peer_as}")
-    console.print(f"  Neighbors: {', '.join(config.bgp.neighbors) or 'none'}")
-    console.print(f"  Router ID: {config.bgp.router_id}")
-    console.print(f"  Local Address: {config.bgp.local_address}")
-    console.print(f"  Hold Time: {config.bgp.hold_time}s")
-    console.print(f"  BFD: {'enabled' if config.bgp.bfd_enabled else 'disabled'}")
+    console.print("[cyan]HA Mode:[/cyan]")
+    console.print(f"  Mode: {config.ha_mode}")
+    console.print()
+
+    if config.ha_mode == "bgp":
+        console.print("[cyan]BGP:[/cyan]")
+        console.print(f"  Local AS: {config.bgp.local_as}")
+        console.print(f"  Peer AS: {config.bgp.peer_as}")
+        console.print(f"  Neighbors: {', '.join(config.bgp.neighbors) or 'none'}")
+        console.print(f"  Router ID: {config.bgp.router_id}")
+        console.print(f"  Local Address: {config.bgp.local_address}")
+        console.print(f"  Hold Time: {config.bgp.hold_time}s")
+        console.print(f"  BFD: {'enabled' if config.bgp.bfd_enabled else 'disabled'}")
+    else:
+        console.print("[cyan]Keepalived:[/cyan]")
+        console.print(f"  Enabled: {config.keepalived.enabled}")
+        console.print(f"  Peers: {', '.join(config.keepalived.peers) or 'none'}")
+        console.print(f"  Interface: {config.keepalived.interface or 'auto-detect'}")
+        console.print(
+            f"  Mode: {'multicast' if config.keepalived.use_multicast else 'unicast'}"
+        )
+        console.print(f"  Advertisement Interval: {config.keepalived.advert_int}s")
 
     console.print()
     console.print("[cyan]VIPs:[/cyan]")
@@ -701,11 +901,13 @@ def _apply_configuration(config: OberConfig) -> None:
     # Generate HAProxy config
     _generate_haproxy_config(config)
 
-    # Generate ExaBGP config
-    _generate_exabgp_config(config)
-
-    # Configure VIP interface
-    _configure_vip_interface(config)
+    # Generate BGP or Keepalived config based on ha_mode
+    if config.ha_mode == "bgp":
+        _generate_exabgp_config(config)
+        # Configure VIP interface (only for BGP mode - keepalived manages VIPs itself)
+        _configure_vip_interface(config)
+    else:
+        _generate_keepalived_config(config)
 
 
 def _generate_haproxy_config(config: OberConfig) -> None:
@@ -825,6 +1027,102 @@ def _generate_exabgp_config(config: OberConfig) -> None:
 
     config.bgp_config_path.parent.mkdir(parents=True, exist_ok=True)
     config.bgp_config_path.write_text("\n".join(cfg_lines))
+
+
+def _generate_keepalived_config(config: OberConfig) -> None:
+    """Generate keepalived configuration file."""
+    from ober.system import SystemInfo
+
+    system = SystemInfo()
+    local_ip = system.get_local_ip() or "0.0.0.0"
+    hostname = system.hostname
+
+    # Detect interface if not specified
+    interface = config.keepalived.interface
+    if not interface:
+        interface = _detect_default_interface()
+
+    # Build all nodes list (self + peers)
+    all_nodes = [local_ip] + config.keepalived.peers
+
+    cfg_lines = [
+        "# Herr Ober Keepalived Configuration",
+        "# Generated by ober config",
+        "",
+        "global_defs {",
+        f"    router_id ober_{hostname}",
+        "    vrrp_skip_check_adv_addr",
+        "    vrrp_garp_master_delay 1",
+        "}",
+        "",
+        "# Health check script",
+        "vrrp_script chk_haproxy {",
+        f'    script "/usr/bin/curl -sf http://127.0.0.1:{config.stats_port}/health"',
+        "    interval 2",
+        "    weight -50  # Reduce priority by 50 if health check fails",
+        "    fall 2      # Require 2 failures before marking down",
+        "    rise 2      # Require 2 successes before marking up",
+        "}",
+        "",
+    ]
+
+    # Generate one vrrp_instance per VIP
+    for idx, vip_config in enumerate(config.vips):
+        vip = vip_config.address.split("/")[0]  # Strip CIDR notation
+        owner, priority = get_vip_owner(vip, all_nodes, local_ip)
+        router_id = get_vrrp_router_id(vip)
+
+        cfg_lines.extend(
+            [
+                f"# VIP {idx + 1}: {vip} (owner: {owner})",
+                f"vrrp_instance VI_{idx + 1} {{",
+                "    state BACKUP  # All start as BACKUP, preempt determines master",
+                f"    interface {interface}",
+                f"    virtual_router_id {router_id}",
+                f"    priority {priority}",
+                f"    advert_int {config.keepalived.advert_int}",
+                "    preempt_delay 0",
+                "",
+            ]
+        )
+
+        # Unicast or multicast mode
+        if config.keepalived.use_multicast:
+            cfg_lines.append("    # Multicast mode (default 224.0.0.18)")
+        else:
+            cfg_lines.extend(
+                [
+                    "    # Unicast mode",
+                    f"    unicast_src_ip {local_ip}",
+                    "    unicast_peer {",
+                ]
+            )
+            for peer in config.keepalived.peers:
+                cfg_lines.append(f"        {peer}")
+            cfg_lines.extend(
+                [
+                    "    }",
+                    "",
+                ]
+            )
+
+        cfg_lines.extend(
+            [
+                "    # Health check - demote priority if HAProxy is down",
+                "    track_script {",
+                "        chk_haproxy",
+                "    }",
+                "",
+                "    virtual_ipaddress {",
+                f"        {vip}/32 dev {interface}",
+                "    }",
+                "}",
+                "",
+            ]
+        )
+
+    config.keepalived_config_path.parent.mkdir(parents=True, exist_ok=True)
+    config.keepalived_config_path.write_text("\n".join(cfg_lines))
 
 
 def _configure_vip_interface(config: OberConfig) -> None:

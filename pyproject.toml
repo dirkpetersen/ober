@@ -54,10 +54,10 @@ dev = [
 ober = "ober.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/dirkpetersen/ober"
-Documentation = "https://github.com/dirkpetersen/ober#readme"
-Repository = "https://github.com/dirkpetersen/ober.git"
-Issues = "https://github.com/dirkpetersen/ober/issues"
+Homepage = "https://github.com/dirkpetersen/herr-ober"
+Documentation = "https://github.com/dirkpetersen/herr-ober#readme"
+Repository = "https://github.com/dirkpetersen/herr-ober.git"
+Issues = "https://github.com/dirkpetersen/herr-ober/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -63,6 +63,10 @@ def doctor(ctx: click.Context) -> None:
     exabgp_check = _check_exabgp()
     checks.append(exabgp_check)
 
+    # Check 5.5: Keepalived installed
+    keepalived_check = _check_keepalived()
+    checks.append(keepalived_check)
+
     # Check 6: Configuration exists
     config_check = _check_config()
     checks.append(config_check)
@@ -220,6 +224,28 @@ def _check_exabgp() -> dict[str, Any]:
         }
     return {
         "name": "ExaBGP",
+        "passed": False,
+        "status": "not installed",
+        "message": "Run 'ober bootstrap' to install",
+        "critical": False,
+    }
+
+
+def _check_keepalived() -> dict[str, Any]:
+    """Check keepalived installation."""
+    from ober.system import get_keepalived_version
+
+    version = get_keepalived_version()
+    if version:
+        return {
+            "name": "Keepalived",
+            "passed": True,
+            "status": "installed",
+            "message": f"Version {version}",
+            "critical": False,
+        }
+    return {
+        "name": "Keepalived",
         "passed": False,
         "status": "not installed",
         "message": "Run 'ober bootstrap' to install",

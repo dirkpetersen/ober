@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ober.config import OberConfig
-from ober.system import ServiceInfo, get_exabgp_version, get_haproxy_version
+from ober.system import ServiceInfo, get_haproxy_version
 
 console = Console()
 
@@ -29,6 +29,7 @@ def status(ctx: click.Context) -> None:
     result: dict[str, Any] = {
         "services": {},
         "bgp": {},
+        "keepalived": {},
         "haproxy": {},
         "config": {},
     }
@@ -36,6 +37,7 @@ def status(ctx: click.Context) -> None:
     # Service status
     http_service = ServiceInfo.from_service_name("ober-http")
     bgp_service = ServiceInfo.from_service_name("ober-bgp")
+    ka_service = ServiceInfo.from_service_name("ober-ha")
 
     result["services"]["ober-http"] = {
         "active": http_service.is_active,
@@ -43,23 +45,41 @@ def status(ctx: click.Context) -> None:
         "status": http_service.status,
         "pid": http_service.pid,
     }
-    result["services"]["ober-bgp"] = {
-        "active": bgp_service.is_active,
-        "enabled": bgp_service.is_enabled,
-        "status": bgp_service.status,
-        "pid": bgp_service.pid,
-    }
+
+    # HA service based on mode
+    if config.ha_mode == "bgp":
+        result["services"]["ober-bgp"] = {
+            "active": bgp_service.is_active,
+            "enabled": bgp_service.is_enabled,
+            "status": bgp_service.status,
+            "pid": bgp_service.pid,
+        }
+    else:
+        result["services"]["ober-ha"] = {
+            "active": ka_service.is_active,
+            "enabled": ka_service.is_enabled,
+            "status": ka_service.status,
+            "pid": ka_service.pid,
+        }
 
     # HAProxy info
     result["haproxy"]["version"] = get_haproxy_version()
     result["haproxy"]["config_exists"] = config.haproxy_config_path.exists()
 
-    # BGP info
-    result["bgp"]["version"] = get_exabgp_version()
-    result["bgp"]["config_exists"] = config.bgp_config_path.exists()
+    # BGP or Keepalived info based on mode
+    if config.ha_mode == "bgp":
+        from ober.system import get_exabgp_version
 
-    # Get BGP announced routes (if service is running)
-    if bgp_service.is_active:
+        result["bgp"]["version"] = get_exabgp_version()
+        result["bgp"]["config_exists"] = config.bgp_config_path.exists()
+    else:
+        from ober.system import get_keepalived_version
+
+        result["keepalived"]["version"] = get_keepalived_version()
+        result["keepalived"]["config_exists"] = config.keepalived_config_path.exists()
+
+    # Get BGP announced routes (if service is running in BGP mode)
+    if config.ha_mode == "bgp" and bgp_service.is_active:
         result["bgp"]["announced_routes"] = _get_announced_routes()
     else:
         result["bgp"]["announced_routes"] = []
@@ -79,7 +99,9 @@ def status(ctx: click.Context) -> None:
     if json_output:
         click.echo(json.dumps(result, indent=2, default=str))
     else:
-        _print_status(result, http_service, bgp_service)
+        ha_service = bgp_service if config.ha_mode == "bgp" else ka_service
+        ha_name = "ober-bgp" if config.ha_mode == "bgp" else "ober-ha"
+        _print_status(result, http_service, ha_service, ha_name)
 
 
 def _get_announced_routes() -> list[str]:
@@ -106,7 +128,8 @@ def _get_haproxy_stats(port: int) -> dict[str, Any]:
 def _print_status(
     result: dict[str, Any],
     http_service: ServiceInfo,
-    bgp_service: ServiceInfo,
+    ha_service: ServiceInfo,
+    ha_name: str,
 ) -> None:
     """Print status in a human-readable format."""
     console.print()
@@ -120,7 +143,7 @@ def _print_status(
     table.add_column("PID")
     table.add_column("Enabled")
 
-    for name, service in [("ober-http", http_service), ("ober-bgp", bgp_service)]:
+    for name, service in [("ober-http", http_service), (ha_name, ha_service)]:
         status_str = (
             f"[green]{service.status}[/green]"
             if service.is_active
@@ -152,11 +175,11 @@ def _print_status(
 
     console.print()
 
-    # BGP routes
+    # BGP routes (only shown in BGP mode)
     routes = result["bgp"].get("announced_routes", [])
     if routes:
         console.print(f"[bold]Announced Routes:[/bold] {', '.join(routes)}")
-    elif bgp_service.is_active:
+    elif ha_name == "ober-bgp" and ha_service.is_active:
         console.print("[bold]Announced Routes:[/bold] [dim]none[/dim]")
 
     # Show systemd status output for verbose mode

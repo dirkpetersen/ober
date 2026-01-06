@@ -54,6 +54,17 @@ class CertConfig:
     route53_hosted_zone_id: str = ""
 
 
+@dataclass
+class KeepalivedConfig:
+    """Keepalived/VRRP configuration."""
+
+    enabled: bool = False
+    peers: list[str] = field(default_factory=list)  # Other node IPs/hostnames
+    interface: str = ""  # Network interface for VIP (auto-detected if empty)
+    use_multicast: bool = False  # Default: unicast
+    advert_int: int = 1  # VRRP advertisement interval (seconds)
+
+
 def _get_default_install_path() -> Path:
     """Get default install path - current venv if in one, otherwise temp dir."""
     import sys
@@ -72,7 +83,9 @@ class OberConfig:
     """Main Ober configuration."""
 
     install_path: Path = field(default_factory=_get_default_install_path)
+    ha_mode: str = "bgp"  # "bgp" or "keepalived"
     bgp: BGPConfig = field(default_factory=BGPConfig)
+    keepalived: KeepalivedConfig = field(default_factory=KeepalivedConfig)
     vips: list[VIPConfig] = field(default_factory=list)
     backends: list[BackendConfig] = field(default_factory=list)
     certs: CertConfig = field(default_factory=CertConfig)
@@ -94,6 +107,11 @@ class OberConfig:
     def bgp_config_path(self) -> Path:
         """Path to ExaBGP config file."""
         return self.install_path / "etc" / "bgp" / "config.ini"
+
+    @property
+    def keepalived_config_path(self) -> Path:
+        """Path to keepalived config file."""
+        return self.install_path / "etc" / "keepalived" / "keepalived.conf"
 
     @property
     def certs_path(self) -> Path:
@@ -141,6 +159,9 @@ class OberConfig:
         if "install_path" in data:
             self.install_path = Path(data["install_path"]).expanduser()
 
+        if "ha_mode" in data:
+            self.ha_mode = data["ha_mode"]
+
         if "bgp" in data:
             bgp_data = data["bgp"]
             self.bgp = BGPConfig(
@@ -151,6 +172,16 @@ class OberConfig:
                 local_address=bgp_data.get("local_address", ""),
                 hold_time=bgp_data.get("hold_time", 3),
                 bfd_enabled=bgp_data.get("bfd_enabled", True),
+            )
+
+        if "keepalived" in data:
+            ka_data = data["keepalived"]
+            self.keepalived = KeepalivedConfig(
+                enabled=ka_data.get("enabled", False),
+                peers=ka_data.get("peers", []),
+                interface=ka_data.get("interface", ""),
+                use_multicast=ka_data.get("use_multicast", False),
+                advert_int=ka_data.get("advert_int", 1),
             )
 
         if "vips" in data:
@@ -205,6 +236,7 @@ class OberConfig:
 
         data: dict[str, Any] = {
             "install_path": str(self.install_path),
+            "ha_mode": self.ha_mode,
             "bgp": {
                 "local_as": self.bgp.local_as,
                 "peer_as": self.bgp.peer_as,
@@ -213,6 +245,13 @@ class OberConfig:
                 "local_address": self.bgp.local_address,
                 "hold_time": self.bgp.hold_time,
                 "bfd_enabled": self.bgp.bfd_enabled,
+            },
+            "keepalived": {
+                "enabled": self.keepalived.enabled,
+                "peers": self.keepalived.peers,
+                "interface": self.keepalived.interface,
+                "use_multicast": self.keepalived.use_multicast,
+                "advert_int": self.keepalived.advert_int,
             },
             "vips": [{"address": v.address, "interface": v.interface} for v in self.vips],
             "backends": [
@@ -249,6 +288,7 @@ class OberConfig:
         dirs = [
             self.install_path / "etc" / "haproxy",
             self.install_path / "etc" / "bgp",
+            self.install_path / "etc" / "keepalived",
             self.install_path / "etc" / "certs",
         ]
         # Only create bin and venv dirs if not using an external venv (e.g., pipx)

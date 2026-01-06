@@ -252,6 +252,25 @@ def get_exabgp_version() -> str | None:
     return None
 
 
+def get_keepalived_version() -> str | None:
+    """Get installed keepalived version."""
+    try:
+        result = subprocess.run(
+            ["keepalived", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # keepalived outputs version on stderr
+        output = result.stdout + result.stderr
+        match = re.search(r"Keepalived\s+v(\d+\.\d+\.\d+)", output)
+        if match:
+            return match.group(1)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
 def run_command(
     cmd: list[str],
     check: bool = True,

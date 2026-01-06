@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Herr Ober ("Head Waiter") is a high-performance S3 ingress controller for Ceph RGW clusters. Uses HAProxy 3.3 (AWS-LC) for SSL offloading and ExaBGP for Layer 3 HA via BGP/ECMP.
+Herr Ober ("Head Waiter") is a high-performance S3 ingress controller for Ceph RGW clusters. Uses HAProxy 3.3 (AWS-LC) for SSL offloading with two HA modes:
+- **BGP/ECMP mode** (ExaBGP) - For environments with BGP-capable routers
+- **Keepalived mode** (VRRP) - For environments without BGP support
 
 - **PyPI package:** `herr-ober` (CLI command: `ober`)
 - **Python:** 3.12+ required
@@ -44,14 +46,21 @@ mypy ober/
 
 ## Architecture
 
-"Shared Nothing" cluster - each node operates independently. Nodes announce a shared VIP via BGP; upstream router uses ECMP to distribute traffic.
+"Shared Nothing" cluster - each node operates independently with one of two HA modes:
+
+**BGP/ECMP Mode:** Nodes announce a shared VIP via BGP; upstream router uses ECMP to distribute traffic.
+
+**Keepalived Mode:** Multiple VIPs (one per node) with VRRP failover; DNS round-robin distributes clients.
 
 Per-node components:
 - **HAProxy 3.3 (AWS-LC)** - SSL termination, ACLs, proxies to Ceph RGW backends
-- **ExaBGP** - Announces VIP(s) to upstream router via BGP
+- **ExaBGP** (BGP mode) - Announces VIP(s) to upstream router via BGP
+- **Keepalived** (Keepalived mode) - VRRP-based VIP failover between nodes
 - **ober CLI** - Python controller managing everything
 
-Critical relationship: `ober-bgp.service` has `BindsTo=ober-http.service`. If HAProxy dies, BGP withdraws immediately.
+Critical relationships:
+- BGP mode: `ober-bgp.service` has `BindsTo=ober-http.service`. If HAProxy dies, BGP withdraws immediately.
+- Keepalived mode: `ober-ha.service` has `BindsTo=ober-http.service`. If HAProxy dies, VIP fails over.
 
 ## Code Architecture
 
@@ -175,4 +184,247 @@ sudo ober bootstrap /path/to/install
 
 ### Systemd Services
 - `ober-http.service` - HAProxy
-- `ober-bgp.service` - ExaBGP (bound to ober-http)
+- `ober-bgp.service` - ExaBGP (bound to ober-http) - BGP mode only
+- `ober-ha.service` - Keepalived (bound to ober-http) - Keepalived mode only
+
+---
+
+## Keepalived Mode Implementation Plan
+
+### Overview
+
+Keepalived mode provides HA for environments where BGP is not available. It uses VRRP (Virtual Router Redundancy Protocol) for VIP failover between nodes.
+
+**Key difference from BGP mode:**
+- BGP mode: Single shared VIP, router distributes traffic via ECMP
+- Keepalived mode: Multiple VIPs (one per node), DNS round-robin distributes clients
+
+### Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Load balancing model | Multiple VIPs + DNS round-robin | Each node owns one VIP; if node fails, its VIP floats to another node |
+| BGP vs Keepalived | Mutually exclusive | Simpler configuration and troubleshooting |
+| Node priority | Equal priority (hash-based) | VIP ownership determined by hostname hash for consistency |
+| Failback behavior | Preempt | Recovered nodes reclaim their original VIP immediately |
+| VRRP communication | Unicast (default), multicast optional | Unicast works in all environments; multicast blocked by many networks |
+| Authentication | None | Simplicity; internal network assumed trusted |
+| Minimum nodes | 2 (recommended: 3) | Warn if fewer than 2 peers, but allow for testing |
+| Package installation | Bootstrap installs both ExaBGP and keepalived | User chooses mode during `ober config` |
+| DNS management | Out of scope | User manages DNS separately |
+
+### VIP Assignment Algorithm
+
+VIPs are assigned to nodes using a consistent hash based on hostname:
+
+```python
+def get_vip_owner(vip: str, nodes: list[str]) -> str:
+    """Determine which node owns a VIP based on consistent hashing."""
+    sorted_nodes = sorted(nodes)
+    vip_hash = hash(vip) % len(sorted_nodes)
+    return sorted_nodes[vip_hash]
+```
+
+This ensures:
+- Deterministic assignment (same result on all nodes)
+- Consistent even when nodes are added/removed
+- Even distribution of VIPs across nodes
+
+### Configuration Structure
+
+New dataclass in `ober/config.py`:
+
+```python
+@dataclass
+class KeepalivedConfig:
+    """Keepalived/VRRP configuration."""
+    enabled: bool = False
+    peers: list[str] = field(default_factory=list)  # Other node IPs/hostnames
+    interface: str = ""  # Network interface for VIP (auto-detected if empty)
+    use_multicast: bool = False  # Default: unicast
+    advert_int: int = 1  # VRRP advertisement interval (seconds)
+```
+
+Updated `OberConfig`:
+
+```python
+@dataclass
+class OberConfig:
+    # ... existing fields ...
+    ha_mode: str = "bgp"  # "bgp" or "keepalived"
+    keepalived: KeepalivedConfig = field(default_factory=KeepalivedConfig)
+```
+
+### Config File Example (`ober.yaml`)
+
+```yaml
+ha_mode: keepalived
+
+keepalived:
+  enabled: true
+  peers:
+    - 192.168.1.11
+    - 192.168.1.12
+    - 192.168.1.13
+  interface: eth0  # Optional, auto-detected
+  use_multicast: false
+  advert_int: 1
+
+vips:
+  - 10.0.0.100
+  - 10.0.0.101
+  - 10.0.0.102
+
+# ... rest of config (backends, certs, etc.)
+```
+
+### Generated Keepalived Config
+
+Location: `<install-path>/etc/keepalived/keepalived.conf`
+
+```conf
+global_defs {
+    router_id ober_<hostname>
+    vrrp_skip_check_adv_addr
+    vrrp_garp_master_delay 1
+}
+
+# One vrrp_instance per VIP
+vrrp_instance VI_<vip_index> {
+    state BACKUP  # All nodes start as BACKUP, preempt determines master
+    interface eth0
+    virtual_router_id <1-255 based on VIP hash>
+    priority <100 if owner, 90 otherwise>
+    preempt_delay 0
+    advert_int 1
+
+    # Unicast mode (default)
+    unicast_src_ip <local_ip>
+    unicast_peer {
+        <peer_ip_1>
+        <peer_ip_2>
+    }
+
+    # Health check - demote priority if HAProxy is down
+    track_script {
+        chk_haproxy
+    }
+
+    virtual_ipaddress {
+        <vip>/32 dev eth0
+    }
+}
+
+vrrp_script chk_haproxy {
+    script "/usr/bin/curl -sf http://127.0.0.1:8404/health"
+    interval 2
+    weight -50  # Reduce priority by 50 if health check fails
+    fall 2      # Require 2 failures before marking down
+    rise 2      # Require 2 successes before marking up
+}
+```
+
+### Health Check Mechanism (Keepalived Mode)
+
+Unlike BGP mode where `ober health` outputs commands to stdout, keepalived uses `track_script`:
+
+1. Keepalived runs the health check script every 2 seconds
+2. Script checks HAProxy's `/health` endpoint
+3. If check fails twice consecutively, node priority drops by 50
+4. Lower priority triggers VRRP failover to another node
+5. When HAProxy recovers, priority restores and node reclaims VIP (preempt)
+
+### Service Configuration
+
+**`ober-ha.service`** (replaces `ober-bgp.service` in keepalived mode):
+
+```ini
+[Unit]
+Description=Ober HA (Keepalived)
+After=network-online.target ober-http.service
+Wants=network-online.target
+BindsTo=ober-http.service
+
+[Service]
+Type=forking
+PIDFile=/run/keepalived.pid
+ExecStart=/usr/sbin/keepalived -f <install-path>/etc/keepalived/keepalived.conf
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Firewall Configuration
+
+Keepalived requires VRRP protocol (IP protocol 112):
+
+**Unicast mode:**
+```bash
+# UFW (Ubuntu/Debian)
+ufw allow proto vrrp from <peer_ip>
+
+# firewalld (RHEL)
+firewall-cmd --permanent --add-rich-rule='rule protocol value="vrrp" accept'
+```
+
+**Multicast mode (optional):**
+```bash
+# Allow VRRP multicast (224.0.0.18)
+ufw allow proto vrrp to 224.0.0.18
+```
+
+### CLI Changes
+
+**`ober config` wizard:**
+1. New first question: "Select HA mode: BGP or Keepalived"
+2. If Keepalived selected:
+   - Skip BGP-specific questions (AS numbers, router neighbors)
+   - Ask for peer node IPs (Slurm hostlist supported)
+   - Ask for VIPs (one per node recommended)
+   - Ask unicast vs multicast
+
+**`ober status`:**
+- Show keepalived state (MASTER/BACKUP for each VIP)
+- Show peer connectivity
+- Show which VIPs this node owns
+
+**`ober doctor`:**
+- Check keepalived is installed
+- Verify VRRP connectivity to peers
+- Validate VIP count matches node count (warn if mismatch)
+- Check firewall allows VRRP protocol
+
+### Bootstrap Changes
+
+`ober bootstrap` installs **both** ExaBGP and keepalived:
+
+**Debian/Ubuntu:**
+```bash
+apt install keepalived exabgp
+```
+
+**RHEL:**
+```bash
+dnf install keepalived exabgp
+```
+
+Only the selected mode's service is enabled during `ober config`.
+
+### Failure Scenarios
+
+| Event | Mechanism | Recovery Time |
+|-------|-----------|---------------|
+| HAProxy crash | `BindsTo=` stops keepalived, VIP fails over | Instant |
+| HAProxy stall | `track_script` detects, priority drops, VIP fails over | ~4-6 seconds |
+| Node crash | VRRP timeout, peer takes over VIP | ~3 seconds (3x advert_int) |
+| Network partition | VRRP packets stop, both nodes may claim VIP (split-brain) | N/A - see note |
+
+**Split-brain note:** In unicast mode with network partition, split-brain is possible. Mitigation: ensure reliable network between nodes. For critical deployments, consider fencing or use BGP mode instead.
+
+### Future Features (Out of Scope for Initial Implementation)
+
+- **Route53 integration:** Auto-register VIPs in DNS with health checks
+- **Node weights:** Allow unequal VIP distribution based on node capacity
+- **Fencing:** STONITH integration to prevent split-brain
+- **IPv6 support:** VRRP for IPv6 VIPs

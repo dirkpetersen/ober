@@ -1249,7 +1249,7 @@ class TestStatusCommandEdgeCases:
             patch("ober.commands.status.ServiceInfo") as mock_svc,
             patch("ober.commands.status.OberConfig.load") as mock_config,
             patch("ober.commands.status.get_haproxy_version", return_value="3.3.0"),
-            patch("ober.commands.status.get_exabgp_version", return_value="4.2.21"),
+            patch("ober.system.get_exabgp_version", return_value="4.2.21"),
             patch("ober.commands.status._get_haproxy_stats", return_value={}),
         ):
             http_mock = MagicMock()
@@ -1264,12 +1264,19 @@ class TestStatusCommandEdgeCases:
             bgp_mock.status = "active"
             bgp_mock.pid = 5678
 
-            mock_svc.from_service_name.side_effect = [http_mock, bgp_mock]
+            ka_mock = MagicMock()
+            ka_mock.is_active = False
+            ka_mock.is_enabled = False
+            ka_mock.status = "inactive"
+            ka_mock.pid = None
+
+            mock_svc.from_service_name.side_effect = [http_mock, bgp_mock, ka_mock]
 
             # Use VIPConfig and BackendConfig directly instead of MagicMock
             from ober.config import BackendConfig, VIPConfig
 
             config_mock = MagicMock()
+            config_mock.ha_mode = "bgp"
             config_mock.config_path.exists.return_value = True
             config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = True
@@ -1299,6 +1306,7 @@ class TestStatusCommandEdgeCases:
             mock_svc.from_service_name.return_value = svc_mock
 
             config_mock = MagicMock()
+            config_mock.ha_mode = "bgp"
             config_mock.config_path.exists.return_value = True
             config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = True
@@ -1901,6 +1909,7 @@ class TestStatusNoConfig:
             mock_svc.from_service_name.return_value = svc_mock
 
             config_mock = MagicMock()
+            config_mock.ha_mode = "bgp"
             config_mock.config_path.exists.return_value = False
             config_mock.config_path = Path("~/.ober/etc/ober.yaml")
             config_mock.haproxy_config_path.exists.return_value = False
@@ -1954,7 +1963,7 @@ class TestPrintStatus:
         bgp_service.pid = 5678
         bgp_service.is_enabled = True
 
-        _print_status(result, http_service, bgp_service)
+        _print_status(result, http_service, bgp_service, "ober-bgp")
         captured = capsys.readouterr()
         assert "10.0.100.1" in captured.out
 
